@@ -50,8 +50,10 @@ jobs:
 
       - name: Prepare Windows icon
         shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
-          python -c "from PIL import Image; im=Image.open('assets/logo.png').convert('RGBA'); im.save('assets/logo.ico', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128)])"
+          python build/generate_icon.py
 
       - name: Build one-folder EXE
         shell: pwsh
@@ -67,7 +69,7 @@ jobs:
           Copy-Item LICENSE "dist\Full Album Maker\LICENSE.txt"
           Copy-Item THIRD_PARTY_NOTICES.md "dist\Full Album Maker\THIRD_PARTY_NOTICES.md"
           New-Item -ItemType Directory -Force "dist\Full Album Maker\assets" | Out-Null
-          Copy-Item "assets\logo.png" "dist\Full Album Maker\assets\logo.png"
+          Copy-Item "assets\logo.svg" "dist\Full Album Maker\assets\logo.svg"
 
           $ffLicense = Get-ChildItem ffmpeg_unpack -Recurse -File | Where-Object { $_.Name -eq "LICENSE.txt" } | Select-Object -First 1
           $ffReadme = Get-ChildItem ffmpeg_unpack -Recurse -File | Where-Object { $_.Name -eq "README.txt" } | Select-Object -First 1
