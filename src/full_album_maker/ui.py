@@ -45,6 +45,7 @@ from .timeline import (
     project_signature,
     save_timeline,
     timeline_matches_project,
+    validate_timeline_against_project,
 )
 
 
@@ -1163,22 +1164,54 @@ class MainWindow(QMainWindow):
     def render(self):
         report = self.project.validation()
         if report["errors"]:
-            self._error("Proyek belum siap:\n\n" + "\n".join(f"• {x}" for x in report["errors"]))
+            self._error(
+                "Proyek belum siap:\n\n"
+                + "\n".join(f"• {x}" for x in report["errors"])
+            )
+            return
+
+        if self.timeline_plan is None or not self.timeline_ready:
+            self._error(
+                "Timeline belum siap. Klik AUTO SUSUN TIMELINE sebelum render."
+            )
+            return
+
+        timeline_errors = validate_timeline_against_project(
+            self.timeline_plan,
+            self.project,
+        )
+        if timeline_errors:
+            self.invalidate_timeline()
+            self.refresh()
+            self._error(
+                "Timeline sudah tidak cocok dengan proyek. "
+                "Klik AUTO SUSUN TIMELINE lagi.\n\n"
+                + "\n".join(f"• {x}" for x in timeline_errors)
+            )
             return
 
         default_path = str(output_dir() / "FULL_ALBUM_FINAL.mp4")
-        path, _ = QFileDialog.getSaveFileName(self, "Simpan Full Album", default_path, "MP4 (*.mp4)")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Simpan Full Album",
+            default_path,
+            "MP4 (*.mp4)",
+        )
         if not path:
             return
 
         self.render_btn.setEnabled(False)
-        self.render_btn.setText("Rendering…")
+        self.render_btn.setText("Rendering dari Timeline…")
         project_snapshot = deepcopy(self.project)
+        timeline_snapshot = deepcopy(self.timeline_plan)
 
         def work():
             try:
-                renderer = FFmpegRenderer(project_snapshot)
-                result = renderer.render(path, log=self.bridge.render_log.emit)
+                renderer = FFmpegRenderer(project_snapshot, timeline_snapshot)
+                result = renderer.render(
+                    path,
+                    log=self.bridge.render_log.emit,
+                )
                 self.bridge.render_done.emit(result)
             except Exception as exc:
                 self.bridge.error.emit(str(exc))
