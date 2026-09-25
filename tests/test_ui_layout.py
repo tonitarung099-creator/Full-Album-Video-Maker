@@ -56,7 +56,7 @@ def test_mockup_layout_has_no_overlap():
     window.close()
 
 
-def test_step1_timeline_button_is_visual_only_without_media():
+def test_auto_timeline_starts_empty_without_media():
     app = QApplication.instance() or QApplication([])
     app.setStyleSheet(APP_STYLE)
 
@@ -97,4 +97,81 @@ def test_ui_accepts_only_real_matching_timeline_plan():
     assert window.timeline_plan is None
     assert window.timeline_preview.plan is None
     assert "Perlu Diperbarui" in window.timeline_status.text()
+    window.close()
+
+
+def test_auto_susun_timeline_builds_real_plan_and_json(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(APP_STYLE)
+
+    import full_album_maker.ui as ui_module
+    monkeypatch.setattr(ui_module, "output_dir", lambda: tmp_path)
+
+    window = MainWindow()
+    project = Project(
+        videos=[MediaItem("video.mp4", 2400.0)],
+        audios=[MediaItem("album.mp3", 3600.0)],
+    )
+    project.settings.auto_speed = False
+    project.settings.manual_speed = 0.5
+    project.settings.loop_mode = "loop"
+
+    window.project = project
+    window.controller.project = project
+    window.refresh()
+
+    window.auto_build_timeline()
+    app.processEvents()
+
+    assert window.timeline_ready is True
+    assert window.timeline_plan is not None
+    assert window.timeline_preview.plan is window.timeline_plan
+    assert window.timeline_plan.duration == 3600.0
+    assert window.timeline_plan.auto_cut_seconds == 1200.0
+    assert window.timeline_plan.video_clips[0].source_out == 1800.0
+    assert "Timeline Siap" in window.timeline_status.text()
+
+    timeline_file = tmp_path / "Timeline_Auto.json"
+    assert timeline_file.exists()
+    assert window.timeline_file_path == str(timeline_file)
+    assert "AUTO TIMELINE SELESAI" in window.chat.toPlainText()
+
+    window.close()
+
+
+def test_regenerate_replaces_old_timeline(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(APP_STYLE)
+
+    import full_album_maker.ui as ui_module
+    monkeypatch.setattr(ui_module, "output_dir", lambda: tmp_path)
+
+    window = MainWindow()
+    project = Project(
+        videos=[MediaItem("video.mp4", 1200.0)],
+        audios=[MediaItem("album.mp3", 3600.0)],
+    )
+    project.settings.auto_speed = True
+    project.settings.min_speed = 0.5
+    project.settings.loop_mode = "loop"
+
+    window.project = project
+    window.controller.project = project
+    window.refresh()
+
+    window.auto_build_timeline()
+    first = window.timeline_plan
+    assert first is not None
+    assert first.loop_fill_seconds == 1200.0
+
+    project.settings.min_speed = 0.4
+    window.invalidate_timeline()
+    window.auto_build_timeline()
+    second = window.timeline_plan
+
+    assert second is not None
+    assert second is not first
+    assert second.planned_speed == 0.4
+    assert second.loop_fill_seconds == 600.0
+    assert window.timeline_file_path == str(tmp_path / "Timeline_Auto.json")
     window.close()
