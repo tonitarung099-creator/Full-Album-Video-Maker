@@ -161,6 +161,8 @@ QPushButton#accentButton:hover {
     background: #7135ed;
 }
 QPushButton#autoTimelineButton {
+    min-height: 68px;
+    max-height: 68px;
     background: qlineargradient(
         x1:0, y1:0, x2:1, y2:0,
         stop:0 #7628e8,
@@ -178,6 +180,8 @@ QPushButton#autoTimelineButton:hover {
     border-color: #63edff;
 }
 QPushButton#renderButton {
+    min-height: 42px;
+    max-height: 42px;
     background: qlineargradient(
         x1:0, y1:0, x2:1, y2:0,
         stop:0 #bd31ed,
