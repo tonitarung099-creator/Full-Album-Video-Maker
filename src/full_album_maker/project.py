@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable
+
 
 @dataclass
 class MediaItem:
@@ -12,6 +13,7 @@ class MediaItem:
     @property
     def name(self) -> str:
         return Path(self.path).name
+
 
 @dataclass
 class ProjectSettings:
@@ -25,6 +27,7 @@ class ProjectSettings:
     codec: str = "h264"
     video_bitrate: str = "12M"
     audio_bitrate: str = "320k"
+
 
 @dataclass
 class Project:
@@ -62,8 +65,99 @@ class Project:
     def sort_audio_by_name(self) -> None:
         self.audios.sort(key=lambda x: x.name.casefold())
 
+    def move_audio(self, from_position: int, to_position: int) -> None:
+        if not 1 <= from_position <= len(self.audios):
+            raise ValueError("Posisi lagu asal tidak valid.")
+        if not 1 <= to_position <= len(self.audios):
+            raise ValueError("Posisi lagu tujuan tidak valid.")
+        item = self.audios.pop(from_position - 1)
+        self.audios.insert(to_position - 1, item)
+
     def reorder_audio(self, order: Iterable[int]) -> None:
         indices = list(order)
         if sorted(indices) != list(range(len(self.audios))):
             raise ValueError("Urutan audio tidak valid.")
         self.audios = [self.audios[i] for i in indices]
+
+    def validation(self) -> dict[str, list[str]]:
+        errors: list[str] = []
+        warnings: list[str] = []
+
+        if not self.videos:
+            errors.append("Belum ada footage video.")
+        if not self.audios:
+            errors.append("Belum ada lagu.")
+        if self.videos and self.total_video_duration <= 0:
+            errors.append("Durasi footage tidak valid.")
+        if self.audios and self.total_audio_duration <= 0:
+            errors.append("Durasi album tidak valid.")
+
+        missing = [x.name for x in [*self.videos, *self.audios] if not Path(x.path).exists()]
+        if missing:
+            errors.append(f"{len(missing)} file sumber tidak ditemukan.")
+
+        duplicate_audio = len({str(Path(x.path).resolve()).casefold() for x in self.audios}) != len(self.audios)
+        if duplicate_audio:
+            warnings.append("Ada lagu yang sama dimasukkan lebih dari sekali.")
+
+        if self.videos and self.audios:
+            if self.needs_loop() and self.settings.loop_mode == "none":
+                errors.append("Footage terlalu pendek tetapi mode loop dimatikan.")
+            if self.planned_speed() < 0.35:
+                warnings.append("Slow motion sangat rendah; gerakan video bisa terlihat terlalu lambat.")
+            if self.total_video_duration < self.total_audio_duration * 0.15:
+                warnings.append("Footage sangat pendek dibanding album; loop akan cukup sering terlihat.")
+
+        return {"errors": errors, "warnings": warnings}
+
+    def optimize_youtube(self, quality: str = "1080p") -> dict[str, object]:
+        profiles = {
+            "1080p": (1920, 1080, 30, "12M"),
+            "1440p": (2560, 1440, 30, "20M"),
+            "4k": (3840, 2160, 30, "45M"),
+        }
+        key = quality.casefold()
+        if key not in profiles:
+            raise ValueError("quality harus 1080p, 1440p, atau 4k.")
+
+        width, height, fps, bitrate = profiles[key]
+        s = self.settings
+        s.width = width
+        s.height = height
+        s.fps = fps
+        s.codec = "h264"
+        s.video_bitrate = bitrate
+        s.audio_bitrate = "320k"
+        s.auto_speed = True
+        s.min_speed = 0.50
+        s.loop_mode = "auto"
+
+        return {
+            "quality": key,
+            "resolution": [width, height],
+            "fps": fps,
+            "codec": s.codec,
+            "video_bitrate": bitrate,
+            "audio_bitrate": s.audio_bitrate,
+            "planned_speed": round(self.planned_speed(), 4),
+            "needs_loop": self.needs_loop(),
+        }
+
+    def to_dict(self) -> dict:
+        return {
+            "version": 1,
+            "videos": [asdict(x) for x in self.videos],
+            "audios": [asdict(x) for x in self.audios],
+            "settings": asdict(self.settings),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Project":
+        if int(data.get("version", 1)) != 1:
+            raise ValueError("Versi file proyek belum didukung.")
+        videos = [MediaItem(**x) for x in data.get("videos", [])]
+        audios = [MediaItem(**x) for x in data.get("audios", [])]
+        settings_data = data.get("settings", {})
+        valid_fields = ProjectSettings.__dataclass_fields__
+        settings = ProjectSettings(**{k: v for k, v in settings_data.items() if k in valid_fields})
+        return cls(videos=videos, audios=audios, settings=settings)
