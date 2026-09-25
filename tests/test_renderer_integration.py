@@ -104,6 +104,12 @@ def test_real_ffmpeg_full_album_render(codec, encoder, tmp_path):
     assert lines[0].startswith("00:00 01 Intro")
     assert lines[1].startswith("00:01 02 Lanjut")
 
+    tracklist = tmp_path / "Tracklist.txt"
+    assert tracklist.exists()
+    track_lines = tracklist.read_text(encoding="utf-8").splitlines()
+    assert track_lines[0].startswith("01. 01 Intro")
+    assert track_lines[1].startswith("02. 02 Lanjut")
+
 
 def test_real_ffmpeg_short_pingpong(tmp_path):
     ffmpeg = ffmpeg_path()
