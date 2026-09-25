@@ -89,6 +89,7 @@ def test_ui_accepts_only_real_matching_timeline_plan():
     assert window.timeline_ready is True
     assert window.timeline_plan is plan
     assert window.timeline_preview.plan is plan
+    assert window.render_btn.isEnabled() is True
     assert "Timeline Siap" in window.timeline_status.text()
 
     project.audios.append(MediaItem("extra.mp3", 5.0))
@@ -98,6 +99,7 @@ def test_ui_accepts_only_real_matching_timeline_plan():
     assert window.timeline_ready is False
     assert window.timeline_plan is None
     assert window.timeline_preview.plan is None
+    assert window.render_btn.isEnabled() is False
     assert "Perlu Diperbarui" in window.timeline_status.text()
     window.close()
 
