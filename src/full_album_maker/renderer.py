@@ -69,6 +69,8 @@ class FFmpegRenderer:
         if p.total_audio_duration <= 0:
             raise RenderError("Durasi album tidak valid.")
 
+        self._ensure_encoder()
+
         destination = destination or str(output_dir() / "FULL_ALBUM_FINAL.mp4")
         dest_path = Path(destination).resolve()
         source_paths = {Path(x.path).resolve() for x in [*p.videos, *p.audios]}
@@ -107,6 +109,29 @@ class FFmpegRenderer:
 
         self._write_chapters(dest_path.with_name("YouTube_Chapter.txt"))
         return destination
+
+    def _encoder_name(self) -> str:
+        return "libx264" if self.project.settings.codec == "h264" else "libx265"
+
+    def _ensure_encoder(self) -> None:
+        encoder = self._encoder_name()
+        try:
+            result = subprocess.run(
+                [self.ffmpeg, "-hide_banner", "-encoders"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+                check=True,
+            )
+        except Exception as exc:
+            raise RenderError(f"Gagal memeriksa encoder FFmpeg: {exc}") from exc
+        if encoder not in result.stdout:
+            raise RenderError(
+                f"FFmpeg ini tidak menyediakan encoder {encoder}. "
+                "Gunakan FFmpeg build GPL yang menyertakan libx264/libx265."
+            )
 
     def _pingpong_is_safe(self) -> bool:
         s = self.project.settings
@@ -166,7 +191,7 @@ class FFmpegRenderer:
             f"[vcat]setpts=PTS/{self.project.planned_speed():.8f}[vout]"
         )
 
-        codec = "libx264" if s.codec == "h264" else "libx265"
+        codec = self._encoder_name()
         args += [
             "-filter_complex",
             ";".join(filters),
@@ -187,7 +212,7 @@ class FFmpegRenderer:
 
     def _build_pingpong(self, base: Path, out: Path, log=None) -> None:
         s = self.project.settings
-        codec = "libx264" if s.codec == "h264" else "libx265"
+        codec = self._encoder_name()
         args = [
             self.ffmpeg,
             "-y",
