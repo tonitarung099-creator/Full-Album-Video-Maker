@@ -6,6 +6,8 @@ from PySide6.QtWidgets import QApplication
 
 from full_album_maker.paths import asset_path
 from full_album_maker.style import APP_STYLE
+from full_album_maker.project import MediaItem, Project
+from full_album_maker.timeline import TimelineEngine
 from full_album_maker.ui import MainWindow
 
 
@@ -62,4 +64,37 @@ def test_step1_timeline_button_is_visual_only_without_media():
     assert window.timeline_ready is False
     assert window.project.videos == []
     assert window.project.audios == []
+    window.close()
+
+
+def test_ui_accepts_only_real_matching_timeline_plan():
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(APP_STYLE)
+
+    window = MainWindow()
+    project = Project(
+        videos=[MediaItem("video.mp4", 40.0)],
+        audios=[MediaItem("song.mp3", 60.0)],
+    )
+    project.settings.min_speed = 0.5
+    window.project = project
+    window.controller.project = project
+
+    plan = TimelineEngine().build(project)
+    window.apply_timeline_plan(plan)
+    app.processEvents()
+
+    assert window.timeline_ready is True
+    assert window.timeline_plan is plan
+    assert window.timeline_preview.plan is plan
+    assert "Timeline Siap" in window.timeline_status.text()
+
+    project.audios.append(MediaItem("extra.mp3", 5.0))
+    window.refresh()
+    app.processEvents()
+
+    assert window.timeline_ready is False
+    assert window.timeline_plan is None
+    assert window.timeline_preview.plan is None
+    assert "Perlu Diperbarui" in window.timeline_status.text()
     window.close()
