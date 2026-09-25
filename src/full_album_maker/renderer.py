@@ -127,7 +127,8 @@ class FFmpegRenderer:
             )
         except Exception as exc:
             raise RenderError(f"Gagal memeriksa encoder FFmpeg: {exc}") from exc
-        if encoder not in result.stdout:
+        encoder_output = (result.stdout or "") + "\n" + (result.stderr or "")
+        if encoder not in encoder_output:
             raise RenderError(
                 f"FFmpeg ini tidak menyediakan encoder {encoder}. "
                 "Gunakan FFmpeg build GPL yang menyertakan libx264/libx265."
