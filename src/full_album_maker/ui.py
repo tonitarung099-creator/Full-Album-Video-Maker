@@ -183,7 +183,7 @@ class TimelinePreview(QWidget):
             painter.drawText(
                 QRectF(left, video_y, usable, video_h + audio_h + 12),
                 Qt.AlignCenter,
-                "Belum ada TimelinePlan.\nEngine lokal tersedia; pembuatan otomatis diaktifkan pada Langkah 3.",
+                "Belum ada timeline.\nKlik AUTO SUSUN TIMELINE untuk membuat TimelinePlan lokal.",
             )
             painter.end()
             return
@@ -664,7 +664,7 @@ class MainWindow(QMainWindow):
         self.regenerate_btn = QPushButton("↻  Regenerate Auto Timeline")
         self.regenerate_btn.clicked.connect(self.auto_build_timeline)
         self.preview_btn = QPushButton("▶  Preview Plan")
-        self.preview_btn.clicked.connect(self.preview_plan_step1)
+        self.preview_btn.clicked.connect(self.preview_plan)
         self.render_btn = QPushButton("▶  Render Full Album")
         self.render_btn.setObjectName("renderButton")
         self.render_btn.setMinimumHeight(42)
@@ -877,6 +877,7 @@ class MainWindow(QMainWindow):
             self.agent = None
             self.timeline_plan = None
             self.timeline_ready = False
+            self.timeline_file_path = ""
             self.timeline_preview.set_timeline(None)
             self.refresh()
         except Exception as exc:
@@ -937,7 +938,7 @@ class MainWindow(QMainWindow):
                 "⚡  AUTO SUSUN TIMELINE\nAnalisis footage + album dan buat timeline otomatis"
             )
 
-    def preview_plan_step1(self):
+    def preview_plan(self):
         plan = self.timeline_plan
         if plan is None:
             QMessageBox.information(
@@ -1040,13 +1041,22 @@ class MainWindow(QMainWindow):
         self.video_total.setText(f"▣   Total Durasi Footage        {fmt(p.total_video_duration)}     {len(p.videos)} file")
         self.audio_total.setText(f"♫   Total Durasi Album          {fmt(album)}     {len(p.audios)} lagu")
 
+        active_plan = self.timeline_plan
+        if active_plan is not None and timeline_matches_project(active_plan, self.project):
+            adjusted_display = active_plan.adjusted_video_duration
+            cut_display = active_plan.auto_cut_seconds
+        else:
+            adjusted_display = adjusted
+            cut_display = cut
+
         self.calc_album.setText(fmt(album))
-        self.calc_video.setText(fmt(adjusted))
-        self.calc_cut.setText(f"potong {fmt(cut)}" if cut > 0 else "tidak perlu")
+        self.calc_video.setText(fmt(adjusted_display))
+        self.calc_cut.setText(f"potong {fmt(cut_display)}" if cut_display > 0 else "tidak perlu")
 
         if self.timeline_plan is not None and not timeline_matches_project(self.timeline_plan, self.project):
             self.timeline_plan = None
             self.timeline_ready = False
+            self.timeline_file_path = ""
 
         if self.timeline_ready and self.timeline_plan is not None:
             self.timeline_status.setText("✓  Timeline Siap")
@@ -1062,9 +1072,12 @@ class MainWindow(QMainWindow):
 
         self.bottom_labels["footage"].setText(f"▣  Footage\n{fmt(p.total_video_duration)}")
         self.bottom_labels["album"].setText(f"♫  Album\n{fmt(album)}")
-        self.bottom_labels["speed"].setText(f"◔  Planned Speed\n{speed:.2f}x")
-        self.bottom_labels["loop"].setText(f"↻  Needs Loop\n{'Yes' if p.needs_loop() else 'No'}")
-        self.bottom_labels["cut"].setText(f"✂  Auto Cut\n{fmt(cut)}")
+        speed_display = self.timeline_plan.planned_speed if self.timeline_plan is not None else speed
+        loop_display = self.timeline_plan.needs_loop if self.timeline_plan is not None else p.needs_loop()
+        cut_display = self.timeline_plan.auto_cut_seconds if self.timeline_plan is not None else cut
+        self.bottom_labels["speed"].setText(f"◔  Planned Speed\n{speed_display:.2f}x")
+        self.bottom_labels["loop"].setText(f"↻  Needs Loop\n{'Yes' if loop_display else 'No'}")
+        self.bottom_labels["cut"].setText(f"✂  Auto Cut\n{fmt(cut_display)}")
         self.bottom_labels["output"].setText(
             f"⚙  Output\n{self.preset.currentText()}  •  {p.settings.width}×{p.settings.height}  •  {p.settings.fps} fps"
         )
