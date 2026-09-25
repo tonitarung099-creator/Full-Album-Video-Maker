@@ -37,6 +37,7 @@ from .project import MediaItem, Project
 from .project_io import load_project, save_project
 from .renderer import FFmpegRenderer
 from .style import APP_STYLE
+from .timeline import TimelinePlan, timeline_matches_project
 
 
 def fmt(seconds: float) -> str:
@@ -68,7 +69,7 @@ class Bridge(QObject):
 
 
 class TimelinePreview(QWidget):
-    """Visual timeline for Step 1 UI. The real timeline engine is added in Step 2."""
+    """Paints only a real TimelinePlan produced by the local timeline engine."""
 
     VIDEO_COLORS = (
         QColor("#2e7df6"),
@@ -88,22 +89,26 @@ class TimelinePreview(QWidget):
         QColor("#3b80e6"),
     )
 
-    def __init__(self, project: Project, parent=None) -> None:
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.project = project
-        self.timeline_ready = False
+        self.plan: TimelinePlan | None = None
         self.setMinimumHeight(260)
         self.setObjectName("timelinePreview")
 
-    def set_project(self, project: Project) -> None:
-        self.project = project
+    def set_timeline(self, plan: TimelinePlan | None) -> None:
+        self.plan = plan
         self.update()
 
-    def set_ready(self, ready: bool) -> None:
-        self.timeline_ready = ready
-        self.update()
-
-    def _rect_for_span(self, x0: float, x1: float, y: float, h: float, duration: float, left: float, width: float) -> QRectF:
+    @staticmethod
+    def _rect_for_span(
+        x0: float,
+        x1: float,
+        y: float,
+        h: float,
+        duration: float,
+        left: float,
+        width: float,
+    ) -> QRectF:
         if duration <= 0:
             return QRectF(left, y, 0, h)
         start = left + (x0 / duration) * width
@@ -122,116 +127,151 @@ class TimelinePreview(QWidget):
         right = 12
         usable = max(80, width - left - right)
 
-        album = self.project.total_audio_duration
-        video_adjusted = self.project.adjusted_video_duration()
-        duration = max(album, video_adjusted, 1.0)
-
         ruler_y = 28
         video_y = 58
         video_h = max(62, int((height - 112) * 0.48))
         audio_y = video_y + video_h + 12
         audio_h = max(54, height - audio_y - 28)
 
+        painter.setPen(QColor("#56cfff"))
+        painter.drawText(
+            QRectF(8, video_y + 5, label_w - 8, 20),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            "▣ VIDEO",
+        )
+        painter.setPen(QColor("#8191a7"))
+        painter.drawText(
+            QRectF(8, video_y + 25, label_w - 8, 18),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            "(footage)",
+        )
+        painter.setPen(QColor("#70b8ff"))
+        painter.drawText(
+            QRectF(8, audio_y + 5, label_w - 8, 20),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            "♪ AUDIO",
+        )
+        painter.setPen(QColor("#8191a7"))
+        painter.drawText(
+            QRectF(8, audio_y + 25, label_w - 8, 18),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            "(album)",
+        )
+
+        plan = self.plan
+        duration = plan.duration if plan is not None else 1.0
+
         painter.setPen(QPen(QColor("#66778e"), 1))
         painter.drawLine(int(left), ruler_y, int(left + usable), ruler_y)
         for i in range(7):
             x = left + usable * i / 6
             painter.drawLine(int(x), ruler_y - 4, int(x), ruler_y + 6)
-            stamp = fmt(duration * i / 6)
+            stamp = fmt(duration * i / 6) if plan is not None else "--:--"
             painter.setPen(QColor("#9ca9b9"))
             painter.drawText(QRectF(x - 31, 4, 62, 18), Qt.AlignCenter, stamp)
             painter.setPen(QPen(QColor("#17263a"), 1, Qt.DashLine))
             painter.drawLine(int(x), ruler_y + 8, int(x), int(audio_y + audio_h))
 
-        painter.setPen(QColor("#56cfff"))
-        painter.drawText(QRectF(8, video_y + 5, label_w - 8, 20), Qt.AlignLeft | Qt.AlignVCenter, "▣ VIDEO")
-        painter.setPen(QColor("#8191a7"))
-        painter.drawText(QRectF(8, video_y + 25, label_w - 8, 18), Qt.AlignLeft | Qt.AlignVCenter, "(footage)")
-        painter.setPen(QColor("#70b8ff"))
-        painter.drawText(QRectF(8, audio_y + 5, label_w - 8, 20), Qt.AlignLeft | Qt.AlignVCenter, "♪ AUDIO")
-        painter.setPen(QColor("#8191a7"))
-        painter.drawText(QRectF(8, audio_y + 25, label_w - 8, 18), Qt.AlignLeft | Qt.AlignVCenter, "(album)")
-
-        if not self.project.videos and not self.project.audios:
+        if plan is None:
             painter.setPen(QColor("#718198"))
             painter.drawText(
                 QRectF(left, video_y, usable, video_h + audio_h + 12),
                 Qt.AlignCenter,
-                "Timeline akan muncul setelah footage dan lagu ditambahkan.",
+                "Belum ada TimelinePlan.\nEngine lokal tersedia; pembuatan otomatis diaktifkan pada Langkah 3.",
             )
             painter.end()
             return
 
-        speed = max(0.01, self.project.planned_speed())
-        cursor = 0.0
-        for index, item in enumerate(self.project.videos):
-            clip_duration = max(0.0, item.duration / speed)
-            if cursor >= duration:
-                break
-            end = min(duration, cursor + clip_duration)
-            rect = self._rect_for_span(cursor, end, video_y, video_h, duration, left, usable)
-            color = self.VIDEO_COLORS[index % len(self.VIDEO_COLORS)]
+        for index, clip in enumerate(plan.video_clips):
+            rect = self._rect_for_span(
+                clip.timeline_in,
+                clip.timeline_out,
+                video_y,
+                video_h,
+                duration,
+                left,
+                usable,
+            )
+            if clip.kind == "loop":
+                color = QColor("#10a866")
+            elif clip.kind == "pingpong":
+                color = QColor("#7448df")
+            else:
+                color = self.VIDEO_COLORS[clip.source_index % len(self.VIDEO_COLORS)]
+
             painter.setPen(QPen(color.lighter(145), 1))
             painter.setBrush(color)
             painter.drawRoundedRect(rect, 5, 5)
             painter.setPen(QColor("#ffffff"))
-            name = Path(item.path).stem
-            label = f"{name[:20]} • {speed:.2f}x"
-            painter.drawText(rect.adjusted(7, 5, -5, -22), Qt.AlignLeft | Qt.AlignTop, label)
+
+            direction = " ↶" if clip.direction == "reverse" else ""
+            tag = ""
+            if clip.kind == "loop":
+                tag = " • Loop"
+            elif clip.kind == "pingpong":
+                tag = " • Ping-Pong"
+
+            label = f"{clip.name[:17]} • {clip.speed:.2f}x{direction}{tag}"
+            painter.drawText(rect.adjusted(6, 5, -5, -22), Qt.AlignLeft | Qt.AlignTop, label)
             painter.setPen(QColor("#dce8f7"))
             painter.drawText(
-                rect.adjusted(7, 24, -5, -4),
+                rect.adjusted(6, 24, -5, -4),
                 Qt.AlignLeft | Qt.AlignBottom,
-                f"{fmt(cursor)} – {fmt(end)}",
+                f"{fmt(clip.timeline_in)} – {fmt(clip.timeline_out)}",
             )
-            cursor = end
 
-        if album > 0 and video_adjusted < album:
-            start = max(0.0, video_adjusted)
-            rect = self._rect_for_span(start, album, video_y, video_h, duration, left, usable)
-            painter.setPen(QPen(QColor("#4cf49a"), 1))
-            painter.setBrush(QColor("#10a866"))
-            painter.drawRoundedRect(rect, 5, 5)
-            painter.setPen(QColor("#ffffff"))
-            painter.drawText(rect.adjusted(7, 6, -4, -4), Qt.AlignLeft | Qt.AlignTop, "↻ Loop")
-
-        if album > 0 and video_adjusted > album:
-            cut = video_adjusted - album
-            x = left + usable * (album / duration)
-            marker_w = min(116.0, max(72.0, usable * cut / duration))
-            rect = QRectF(max(left, x - marker_w), video_y, marker_w, video_h)
-            painter.setPen(QPen(QColor("#ff6485"), 1))
-            painter.setBrush(QColor("#c9325d"))
-            painter.drawRoundedRect(rect, 5, 5)
-            painter.setPen(QColor("#ffffff"))
-            painter.drawText(rect.adjusted(7, 6, -4, -4), Qt.AlignLeft | Qt.AlignTop, f"✂ Auto Cut\n{fmt(cut)}")
-
-        audio_duration = max(album, 1.0)
-        cursor = 0.0
-        for index, item in enumerate(self.project.audios):
-            end = min(album, cursor + max(0.0, item.duration))
-            rect = self._rect_for_span(cursor, end, audio_y, audio_h, audio_duration, left, usable)
+        for index, clip in enumerate(plan.audio_clips):
+            rect = self._rect_for_span(
+                clip.timeline_in,
+                clip.timeline_out,
+                audio_y,
+                audio_h,
+                duration,
+                left,
+                usable,
+            )
             color = self.AUDIO_COLORS[index % len(self.AUDIO_COLORS)]
             painter.setPen(QPen(color.lighter(145), 1))
             painter.setBrush(color)
             painter.drawRoundedRect(rect, 5, 5)
             painter.setPen(QColor("#ffffff"))
-            painter.drawText(rect.adjusted(5, 4, -4, -18), Qt.AlignLeft | Qt.AlignTop, f"Song {index + 1:02d}")
+            painter.drawText(
+                rect.adjusted(5, 4, -4, -18),
+                Qt.AlignLeft | Qt.AlignTop,
+                f"Song {index + 1:02d}",
+            )
             painter.setPen(QColor("#e6efff"))
-            painter.drawText(rect.adjusted(5, 20, -4, -4), Qt.AlignLeft | Qt.AlignBottom, fmt(item.duration))
-            cursor = end
+            painter.drawText(
+                rect.adjusted(5, 20, -4, -4),
+                Qt.AlignLeft | Qt.AlignBottom,
+                fmt(clip.timeline_duration),
+            )
 
-        master = album if album > 0 else duration
-        if self.timeline_ready and master > 0:
-            playhead = left + usable * 0.38
-            painter.setPen(QPen(QColor("#ff466d"), 2))
-            painter.drawLine(int(playhead), ruler_y + 8, int(playhead), int(audio_y + audio_h))
-            painter.setBrush(QColor("#ff466d"))
-            painter.setPen(Qt.NoPen)
-            painter.drawRoundedRect(QRectF(playhead - 24, ruler_y - 22, 48, 18), 5, 5)
+        if plan.auto_cut_seconds > 0:
+            marker_w = min(118.0, max(78.0, usable * min(0.16, plan.auto_cut_seconds / max(duration, 1.0))))
+            rect = QRectF(left + usable - marker_w, video_y, marker_w, video_h)
+            painter.setPen(QPen(QColor("#ff6485"), 1))
+            painter.setBrush(QColor(201, 50, 93, 210))
+            painter.drawRoundedRect(rect, 5, 5)
             painter.setPen(QColor("#ffffff"))
-            painter.drawText(QRectF(playhead - 24, ruler_y - 22, 48, 18), Qt.AlignCenter, fmt(master * 0.38))
+            painter.drawText(
+                rect.adjusted(7, 6, -4, -4),
+                Qt.AlignLeft | Qt.AlignTop,
+                f"✂ Auto Cut\n{fmt(plan.auto_cut_seconds)}",
+            )
 
+        playhead = left + usable * 0.38
+        painter.setPen(QPen(QColor("#ff466d"), 2))
+        painter.drawLine(int(playhead), ruler_y + 8, int(playhead), int(audio_y + audio_h))
+        painter.setBrush(QColor("#ff466d"))
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(QRectF(playhead - 24, ruler_y - 22, 48, 18), 5, 5)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(
+            QRectF(playhead - 24, ruler_y - 22, 48, 18),
+            Qt.AlignCenter,
+            fmt(duration * 0.38),
+        )
         painter.end()
 
 
@@ -332,6 +372,7 @@ class MainWindow(QMainWindow):
         self.pool = GeminiKeyPool()
         self.agent = None
         self.agent_busy = False
+        self.timeline_plan: TimelinePlan | None = None
         self.timeline_ready = False
 
         self.bridge = Bridge()
@@ -592,7 +633,7 @@ class MainWindow(QMainWindow):
         calc_lay.addLayout(calc_grid)
         lay.addWidget(calc_card)
 
-        self.timeline_preview = TimelinePreview(self.project)
+        self.timeline_preview = TimelinePreview()
         lay.addWidget(self.timeline_preview, 1)
 
         legend = QHBoxLayout()
@@ -731,7 +772,7 @@ class MainWindow(QMainWindow):
         s.fps = fps
         s.video_bitrate = bitrate
         s.codec = codec
-        self.timeline_ready = False
+        self.invalidate_timeline()
         self.refresh()
 
     def apply_settings(self, *_):
@@ -742,7 +783,7 @@ class MainWindow(QMainWindow):
             s.manual_speed = float(self.min_speed.value())
         s.min_speed = float(self.min_speed.value())
         s.loop_mode = self.loop_mode.currentData()
-        self.timeline_ready = False
+        self.invalidate_timeline()
         self.refresh()
 
     def add_video(self):
@@ -772,7 +813,7 @@ class MainWindow(QMainWindow):
                 self._error(str(exc))
         if skipped:
             self.log.appendPlainText(f"{skipped} file duplikat dilewati.")
-        self.timeline_ready = False
+        self.invalidate_timeline()
         self.refresh()
 
     def move_video_selected(self, direction: int):
@@ -783,7 +824,7 @@ class MainWindow(QMainWindow):
         if not 0 <= target < len(self.project.videos):
             return
         self.project.videos[row], self.project.videos[target] = self.project.videos[target], self.project.videos[row]
-        self.timeline_ready = False
+        self.invalidate_timeline()
         self.refresh()
         self.video_list.setCurrentRow(target)
 
@@ -795,18 +836,18 @@ class MainWindow(QMainWindow):
         if not 0 <= target < len(self.project.audios):
             return
         self.project.audios[row], self.project.audios[target] = self.project.audios[target], self.project.audios[row]
-        self.timeline_ready = False
+        self.invalidate_timeline()
         self.refresh()
         self.audio_list.setCurrentRow(target)
 
     def sort_video(self):
         self.project.videos.sort(key=lambda x: x.name.casefold())
-        self.timeline_ready = False
+        self.invalidate_timeline()
         self.refresh()
 
     def sort_audio(self):
         self.project.sort_audio_by_name()
-        self.timeline_ready = False
+        self.invalidate_timeline()
         self.refresh()
 
     def save_project_file(self):
@@ -827,8 +868,9 @@ class MainWindow(QMainWindow):
             self.project = load_project(path)
             self.controller = ProjectController(self.project)
             self.agent = None
+            self.timeline_plan = None
             self.timeline_ready = False
-            self.timeline_preview.set_project(self.project)
+            self.timeline_preview.set_timeline(None)
             self.refresh()
         except Exception as exc:
             self._error(f"Gagal membuka proyek: {exc}")
@@ -841,28 +883,40 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_dir())))
 
     def preview_auto_timeline_step1(self):
-        if not self.project.videos or not self.project.audios:
-            self.timeline_ready = False
-            self.refresh()
-            QMessageBox.information(
-                self,
-                "Auto Timeline",
-                "Langkah 1 saat ini baru menyelesaikan tampilan. Tambahkan footage dan lagu untuk melihat pratinjau visual. Engine timeline lokal akan dibuat pada Langkah 2.",
-            )
-            return
-        self.timeline_ready = True
-        self.timeline_preview.set_ready(True)
-        self.refresh()
-        self.chat.appendPlainText(
-            "\nAPP\nPratinjau UI Auto Timeline ditampilkan. Engine timeline presisi belum diaktifkan pada Langkah 1.\n"
+        QMessageBox.information(
+            self,
+            "Auto Timeline",
+            "Engine Timeline Lokal sudah tersedia pada Langkah 2. "
+            "Tombol AUTO SUSUN TIMELINE baru akan dihubungkan ke engine pada Langkah 3.",
         )
 
     def preview_plan_step1(self):
+        if self.timeline_plan is None:
+            QMessageBox.information(
+                self,
+                "Preview Plan",
+                "Belum ada TimelinePlan aktif. Pembuatan otomatis dari tombol UI akan diaktifkan pada Langkah 3.",
+            )
+            return
         QMessageBox.information(
             self,
             "Preview Plan",
-            "Preview Plan adalah bagian tampilan Langkah 1. Data timeline presisi akan mulai dibuat pada Langkah 2.",
+            f"Timeline nyata: {len(self.timeline_plan.video_clips)} clip video, "
+            f"{len(self.timeline_plan.audio_clips)} clip audio, durasi {fmt(self.timeline_plan.duration)}.",
         )
+
+    def apply_timeline_plan(self, plan: TimelinePlan) -> None:
+        if not timeline_matches_project(plan, self.project):
+            raise ValueError("TimelinePlan tidak cocok dengan proyek saat ini.")
+        self.timeline_plan = plan
+        self.timeline_ready = True
+        self.timeline_preview.set_timeline(plan)
+        self.refresh()
+
+    def invalidate_timeline(self) -> None:
+        self.timeline_plan = None
+        self.timeline_ready = False
+        self.timeline_preview.set_timeline(None)
 
     def quick_prompt(self, text: str):
         self.prompt.setPlainText(text)
@@ -938,8 +992,10 @@ class MainWindow(QMainWindow):
         self.timeline_status.style().unpolish(self.timeline_status)
         self.timeline_status.style().polish(self.timeline_status)
 
-        self.timeline_preview.set_project(self.project)
-        self.timeline_preview.set_ready(self.timeline_ready)
+        if self.timeline_plan is not None and not timeline_matches_project(self.timeline_plan, self.project):
+            self.timeline_plan = None
+            self.timeline_ready = False
+        self.timeline_preview.set_timeline(self.timeline_plan)
 
         self.bottom_labels["footage"].setText(f"▣  Footage\n{fmt(p.total_video_duration)}")
         self.bottom_labels["album"].setText(f"♫  Album\n{fmt(album)}")
