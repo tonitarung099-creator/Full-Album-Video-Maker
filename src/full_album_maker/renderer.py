@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
+from .atomic_io import atomic_write_text
 from .paths import ffmpeg_path, output_dir, temp_dir
 from .project import Project
 from .timeline import (
@@ -534,11 +535,11 @@ class FFmpegRenderer:
             f"{self._stamp(clip.timeline_in)} {clip.name}"
             for clip in self.timeline.audio_clips
         ]
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        atomic_write_text(path, "\n".join(lines) + "\n", encoding="utf-8")
 
     def _write_tracklist(self, path: Path) -> None:
         lines = [
             f"{index:02d}. {clip.name}  [{self._stamp(clip.timeline_duration)}]"
             for index, clip in enumerate(self.timeline.audio_clips, start=1)
         ]
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        atomic_write_text(path, "\n".join(lines) + "\n", encoding="utf-8")
