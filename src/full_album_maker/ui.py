@@ -983,18 +983,20 @@ class MainWindow(QMainWindow):
         self.calc_video.setText(fmt(adjusted))
         self.calc_cut.setText(f"potong {fmt(cut)}" if cut > 0 else "tidak perlu")
 
-        if self.timeline_ready:
-            self.timeline_status.setText("✓  Timeline Siap")
-            self.timeline_status.setObjectName("timelineStatusReady")
-        else:
-            self.timeline_status.setText("Timeline Perlu Diperbarui" if (p.videos or p.audios) else "Timeline Belum Disusun")
-            self.timeline_status.setObjectName("timelineStatusPending")
-        self.timeline_status.style().unpolish(self.timeline_status)
-        self.timeline_status.style().polish(self.timeline_status)
-
         if self.timeline_plan is not None and not timeline_matches_project(self.timeline_plan, self.project):
             self.timeline_plan = None
             self.timeline_ready = False
+
+        if self.timeline_ready and self.timeline_plan is not None:
+            self.timeline_status.setText("✓  Timeline Siap")
+            self.timeline_status.setObjectName("timelineStatusReady")
+        else:
+            self.timeline_status.setText(
+                "Timeline Perlu Diperbarui" if (p.videos or p.audios) else "Timeline Belum Disusun"
+            )
+            self.timeline_status.setObjectName("timelineStatusPending")
+        self.timeline_status.style().unpolish(self.timeline_status)
+        self.timeline_status.style().polish(self.timeline_status)
         self.timeline_preview.set_timeline(self.timeline_plan)
 
         self.bottom_labels["footage"].setText(f"▣  Footage\n{fmt(p.total_video_duration)}")
