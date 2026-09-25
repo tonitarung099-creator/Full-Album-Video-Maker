@@ -661,11 +661,20 @@ class MainWindow(QMainWindow):
         self._add_media(paths, self.project.audios)
 
     def _add_media(self, paths, target):
+        existing = {str(Path(x.path).resolve()).casefold() for x in target}
+        skipped = 0
         for path in paths:
+            key = str(Path(path).resolve()).casefold()
+            if key in existing:
+                skipped += 1
+                continue
             try:
                 target.append(MediaItem(path=path, duration=probe_duration(path)))
+                existing.add(key)
             except MediaProbeError as exc:
                 self._error(str(exc))
+        if skipped:
+            self.log.appendPlainText(f"{skipped} file duplikat dilewati.")
         self.refresh()
 
     def remove_video(self):
@@ -683,6 +692,89 @@ class MainWindow(QMainWindow):
     def sort_audio(self):
         self.project.sort_audio_by_name()
         self.refresh()
+
+    def move_audio_selected(self, direction: int):
+        row = self.audio_list.currentRow()
+        if row < 0:
+            return
+        target = row + direction
+        if not 0 <= target < len(self.project.audios):
+            return
+        self.project.audios[row], self.project.audios[target] = (
+            self.project.audios[target],
+            self.project.audios[row],
+        )
+        self.refresh()
+        self.audio_list.setCurrentRow(target)
+
+    def save_project_file(self):
+        default = str(output_dir() / "Full_Album_Project.json")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Simpan Proyek",
+            default,
+            "Full Album Project (*.json)",
+        )
+        if not path:
+            return
+        try:
+            saved = save_project(path, self.project)
+            self.log.appendPlainText(f"Proyek disimpan: {saved}")
+        except Exception as exc:
+            self._error(f"Gagal menyimpan proyek: {exc}")
+
+    def load_project_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Buka Proyek",
+            "",
+            "Full Album Project (*.json)",
+        )
+        if not path:
+            return
+        try:
+            loaded = load_project(path)
+            self.project = loaded
+            self.controller = ProjectController(self.project)
+            self.agent = None
+            self.chat.clear()
+            self.refresh()
+            report = self.project.validation()
+            self.log.appendPlainText(f"Proyek dibuka: {path}")
+            if report["errors"]:
+                self.log.appendPlainText("Ada file/setting proyek yang perlu diperbaiki.")
+        except Exception as exc:
+            self._error(f"Gagal membuka proyek: {exc}")
+
+    def optimize_current_preset(self):
+        label = self.preset.currentText().casefold()
+        quality = "4k" if "4k" in label else ("1440p" if "1440" in label else "1080p")
+        result = self.project.optimize_youtube(quality)
+        self.refresh()
+        self.log.appendPlainText(
+            f"Optimasi diterapkan: {quality}, {result['fps']} fps, "
+            f"{result['codec'].upper()}, speed {result['planned_speed']:.3f}×."
+        )
+
+    def show_validation(self):
+        report = self.project.validation()
+        lines = []
+        if report["errors"]:
+            lines.append("ERROR:")
+            lines.extend(f"• {x}" for x in report["errors"])
+        if report["warnings"]:
+            if lines:
+                lines.append("")
+            lines.append("PERINGATAN:")
+            lines.extend(f"• {x}" for x in report["warnings"])
+        if not lines:
+            lines = ["Proyek siap dirender. Tidak ada masalah yang terdeteksi."]
+        QMessageBox.information(self, "Cek Proyek", "\n".join(lines))
+
+    def reset_agent_chat(self):
+        if self.agent is not None:
+            self.agent.reset()
+        self.chat.clear()
 
     def refresh(self):
         self.video_list.clear()
@@ -797,12 +889,14 @@ class MainWindow(QMainWindow):
         self.agent_send_btn.setText("Kirim ke Gemini  ➜")
 
     def render(self):
-        if not self.project.videos:
-            self._error("Tambahkan minimal satu footage video sebelum render.")
+        report = self.project.validation()
+        if report["errors"]:
+            self._error("Proyek belum siap:\n\n" + "\n".join(f"• {x}" for x in report["errors"]))
             return
-        if not self.project.audios:
-            self._error("Tambahkan minimal satu lagu sebelum render.")
-            return
+        if report["warnings"]:
+            self.log.appendPlainText("Peringatan sebelum render:")
+            for warning in report["warnings"]:
+                self.log.appendPlainText(f"• {warning}")
 
         default_path = str(output_dir() / "FULL_ALBUM_FINAL.mp4")
         path, _ = QFileDialog.getSaveFileName(
