@@ -27,7 +27,7 @@ def test_modern_dashboard_layout_has_no_overlap():
         assert left.geometry().right() < right.geometry().left()
 
     assert window.media_tabs.count() == 2
-    assert window.agent_tabs.count() == 4
+    assert window.model.count() == 3
     assert window.render_btn.height() >= 36
 
     for label in window.status_labels.values():
@@ -37,5 +37,7 @@ def test_modern_dashboard_layout_has_no_overlap():
     assert window.video_list.width() > 200
     assert window.audio_list.width() > 200
     assert window.chat.width() > 220
+    assert not hasattr(window, "project_name")
+    assert not hasattr(window, "aspect")
 
     window.close()
