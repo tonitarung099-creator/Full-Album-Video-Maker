@@ -41,8 +41,14 @@ class ProjectController:
                 raise ValueError("loop mode tidak valid")
             s.loop_mode = mode
         elif name == "set_resolution":
-            s.width = int(args["width"])
-            s.height = int(args["height"])
+            width = int(args["width"])
+            height = int(args["height"])
+            if not 320 <= width <= 7680 or not 240 <= height <= 4320:
+                raise ValueError("resolusi di luar batas 320×240 sampai 7680×4320")
+            if width % 2 or height % 2:
+                raise ValueError("width dan height harus angka genap untuk output H.264/H.265")
+            s.width = width
+            s.height = height
         elif name == "set_fps":
             fps = int(args["fps"])
             if fps not in {24, 25, 30, 50, 60}:
