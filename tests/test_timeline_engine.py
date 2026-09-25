@@ -13,6 +13,7 @@ from full_album_maker.timeline import (
     project_signature,
     save_timeline,
     timeline_matches_project,
+    validate_timeline_against_project,
 )
 
 
@@ -193,3 +194,13 @@ def test_plan_validation_catches_gap():
     plan = TimelineEngine().build(project)
     plan.video_clips[0].timeline_in = 1.0
     assert any("tidak sambung" in x for x in plan.validate())
+
+
+def test_timeline_project_validation_rejects_tampered_source_mapping():
+    project = _project(100.0, 80.0)
+    plan = TimelineEngine().build(project)
+    plan.video_clips[0].source_out = 120.0
+    plan.video_clips[0].timeline_out = 120.0
+
+    errors = validate_timeline_against_project(plan, project)
+    assert any("melewati batas durasi source" in x for x in errors)
