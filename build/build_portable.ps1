@@ -24,7 +24,8 @@ if ($Encoders -notmatch "libx265") { throw "FFmpeg build tidak memiliki libx265.
 
 python -m pytest -q
 
-python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Full Album Maker" --paths "$Root\src" "$Root\src\full_album_maker\main.py"
+python -c "from PIL import Image; im=Image.open(r'$Root\assets\logo.png').convert('RGBA'); im.save(r'$Root\assets\logo.ico', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128)])"
+python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Full Album Maker" --icon "$Root\assets\logo.ico" --paths "$Root\src" "$Root\src\full_album_maker\main.py"
 
 $App = "$Root\dist\Full Album Maker"
 New-Item -ItemType Directory -Force "$App\tools\ffmpeg" | Out-Null
@@ -32,6 +33,8 @@ Copy-Item "$Root\tools\ffmpeg\ffmpeg.exe" "$App\tools\ffmpeg\ffmpeg.exe" -Force
 Copy-Item "$Root\tools\ffmpeg\ffprobe.exe" "$App\tools\ffmpeg\ffprobe.exe" -Force
 Copy-Item "$Root\LICENSE" "$App\LICENSE.txt" -Force
 Copy-Item "$Root\THIRD_PARTY_NOTICES.md" "$App\THIRD_PARTY_NOTICES.md" -Force
+New-Item -ItemType Directory -Force "$App\assets" | Out-Null
+Copy-Item "$Root\assets\logo.png" "$App\assets\logo.png" -Force
 
 $FfLicense = Get-ChildItem ffmpeg_unpack -Recurse -File | Where-Object { $_.Name -eq "LICENSE.txt" } | Select-Object -First 1
 $FfReadme = Get-ChildItem ffmpeg_unpack -Recurse -File | Where-Object { $_.Name -eq "README.txt" } | Select-Object -First 1
