@@ -147,3 +147,31 @@ def test_key_pool_401_disables_only_bad_key(monkeypatch, tmp_path):
     assert pool.request_json("https://example.invalid", {}) == {"ok": True}
     assert pool.records[0].enabled is False
     assert pool.records[1].enabled is True
+
+
+def test_controller_optimize_and_move_audio():
+    project = Project(
+        videos=[MediaItem("video.mp4", 60.0)],
+        audios=[
+            MediaItem("02 Song.mp3", 60.0),
+            MediaItem("01 Song.mp3", 60.0),
+        ],
+    )
+    controller = ProjectController(project)
+
+    optimized = controller.execute("optimize_youtube", {"quality": "1080p"})
+    assert optimized["summary"]["settings"]["codec"] == "h264"
+    assert optimized["summary"]["settings"]["video_bitrate"] == "12M"
+
+    controller.execute("move_audio", {"from_position": 2, "to_position": 1})
+    assert project.audios[0].name == "01 Song.mp3"
+
+
+def test_controller_quality_validation():
+    project = Project()
+    controller = ProjectController(project)
+    with pytest.raises(ValueError, match="video_bitrate"):
+        controller.execute(
+            "set_quality",
+            {"video_bitrate": "999M", "audio_bitrate": "320k"},
+        )
