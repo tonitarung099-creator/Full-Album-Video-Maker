@@ -11,6 +11,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .atomic_io import atomic_write_bytes
 from .paths import secure_dir
 
 MAX_KEYS = 100
@@ -110,9 +111,11 @@ class GeminiKeyPool:
             self.records = []
 
     def save(self) -> None:
-        self.vault_path.parent.mkdir(parents=True, exist_ok=True)
-        raw = json.dumps([asdict(r) for r in self.records], ensure_ascii=False).encode("utf-8")
-        self.vault_path.write_bytes(_dpapi_encrypt(raw))
+        raw = json.dumps(
+            [asdict(r) for r in self.records],
+            ensure_ascii=False,
+        ).encode("utf-8")
+        atomic_write_bytes(self.vault_path, _dpapi_encrypt(raw))
 
     def add_keys(self, values: list[str]) -> tuple[int, int]:
         cleaned = []
