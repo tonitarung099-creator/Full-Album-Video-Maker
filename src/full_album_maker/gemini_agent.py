@@ -42,13 +42,12 @@ class GeminiAgent:
         return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     def ask(self, text: str) -> str:
-        user_turn = {"role":"user","parts":[{"text": text}]}
-        self.history.append(user_turn)
+        history_start = len(self.history)
+        self.history.append({"role":"user","parts":[{"text": text}]})
         try:
             return self._run_turn()
         except Exception:
-            if self.history and self.history[-1] is user_turn:
-                self.history.pop()
+            del self.history[history_start:]
             raise
 
     def _run_turn(self) -> str:
