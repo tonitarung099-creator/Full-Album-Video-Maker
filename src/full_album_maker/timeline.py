@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from .atomic_io import atomic_write_text
 from .project import Project
 
 EPSILON = 1e-6
@@ -568,12 +569,8 @@ def save_timeline(path: str, plan: TimelinePlan) -> str:
     target = Path(path)
     if target.suffix.lower() != ".json":
         target = target.with_suffix(".json")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    return str(target)
+    payload = json.dumps(plan.to_dict(), ensure_ascii=False, indent=2)
+    return atomic_write_text(target, payload, encoding="utf-8")
 
 
 def load_timeline(path: str) -> TimelinePlan:
