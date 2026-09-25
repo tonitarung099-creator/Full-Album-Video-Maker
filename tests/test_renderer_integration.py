@@ -27,7 +27,8 @@ def test_real_ffmpeg_full_album_render(tmp_path):
         encoding="utf-8",
         errors="replace",
         check=True,
-    ).stdout
+    )
+    encoders = (encoders.stdout or "") + "\n" + (encoders.stderr or "")
     if "libx264" not in encoders:
         pytest.skip("FFmpeg lokal tidak punya libx264.")
 
