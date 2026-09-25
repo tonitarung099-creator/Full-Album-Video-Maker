@@ -384,6 +384,7 @@ class MainWindow(QMainWindow):
         self.timeline_plan: TimelinePlan | None = None
         self.timeline_ready = False
         self.timeline_file_path = ""
+        self.render_busy = False
 
         self.bridge = Bridge()
         self.bridge.agent_decision.connect(self._handle_agent_decision)
@@ -584,7 +585,7 @@ class MainWindow(QMainWindow):
         self.slowmo_mode.currentIndexChanged.connect(self.apply_settings)
 
         self.min_speed = QDoubleSpinBox()
-        self.min_speed.setRange(0.05, 1.0)
+        self.min_speed.setRange(0.05, 2.0)
         self.min_speed.setSingleStep(0.05)
         self.min_speed.setDecimals(2)
         self.min_speed.setValue(0.50)
@@ -787,11 +788,14 @@ class MainWindow(QMainWindow):
 
     def apply_settings(self, *_):
         s = self.project.settings
-        s.auto_speed = self.slowmo_mode.currentData() == "auto"
-        if self.slowmo_mode.currentData() == "locked":
+        mode = self.slowmo_mode.currentData()
+        value = float(self.min_speed.value())
+        if mode == "locked":
             s.auto_speed = False
-            s.manual_speed = float(self.min_speed.value())
-        s.min_speed = float(self.min_speed.value())
+            s.manual_speed = value
+        else:
+            s.auto_speed = True
+            s.min_speed = min(1.0, value)
         s.loop_mode = self.loop_mode.currentData()
         self.invalidate_timeline()
         self.refresh()
@@ -874,16 +878,36 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Buka Proyek", "", "Full Album Project (*.json)")
         if not path:
             return
+        previous_project = self.project
+        previous_controller = self.controller
+        previous_agent = self.agent
+        previous_plan = self.timeline_plan
+        previous_ready = self.timeline_ready
+        previous_timeline_path = self.timeline_file_path
         try:
-            self.project = load_project(path)
-            self.controller = ProjectController(self.project)
+            candidate = load_project(path)
+            # Exercise all state used by the UI before replacing the active
+            # project. Corrupt/incompatible files therefore fail atomically.
+            project_signature(candidate)
+            candidate.validation()
+
+            self.project = candidate
+            self.controller = ProjectController(candidate)
             self.agent = None
-            self.timeline_plan = None
-            self.timeline_ready = False
-            self.timeline_file_path = ""
-            self.timeline_preview.set_timeline(None)
+            self.invalidate_timeline()
             self.refresh()
         except Exception as exc:
+            self.project = previous_project
+            self.controller = previous_controller
+            self.agent = previous_agent
+            self.timeline_plan = previous_plan
+            self.timeline_ready = previous_ready
+            self.timeline_file_path = previous_timeline_path
+            self.timeline_preview.set_timeline(previous_plan)
+            try:
+                self.refresh()
+            except Exception:
+                pass
             self._error(f"Gagal membuka proyek: {exc}")
 
     def open_keys(self):
@@ -1146,7 +1170,9 @@ class MainWindow(QMainWindow):
         self.timeline_status.style().polish(self.timeline_status)
         self.timeline_preview.set_timeline(self.timeline_plan)
         self.render_btn.setEnabled(
-            self.timeline_ready and self.timeline_plan is not None
+            self.timeline_ready
+            and self.timeline_plan is not None
+            and not self.render_busy
         )
 
         self.bottom_labels["footage"].setText(f"▣  Footage\n{fmt(p.total_video_duration)}")
@@ -1165,6 +1191,9 @@ class MainWindow(QMainWindow):
         self.key_status.setText(f"{summary['ready']}/{summary['total']} key")
 
     def render(self):
+        if self.render_busy:
+            return
+
         report = self.project.validation()
         if report["errors"]:
             self._error(
@@ -1194,6 +1223,7 @@ class MainWindow(QMainWindow):
             return
 
         default_path = str(output_dir() / "FULL_ALBUM_FINAL.mp4")
+        self.render_busy = True
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Simpan Full Album",
@@ -1201,6 +1231,8 @@ class MainWindow(QMainWindow):
             "MP4 (*.mp4)",
         )
         if not path:
+            self.render_busy = False
+            self.refresh()
             return
 
         self.render_btn.setEnabled(False)
@@ -1226,6 +1258,7 @@ class MainWindow(QMainWindow):
         self.log.appendPlainText(text)
 
     def _render_done(self, path):
+        self.render_busy = False
         self.render_btn.setText("▶  Render Full Album")
         self.refresh()
         if path:

@@ -153,11 +153,106 @@ class Project:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Project":
-        if int(data.get("version", 1)) != 1:
+        if not isinstance(data, dict):
+            raise ValueError("Format file proyek tidak valid.")
+        try:
+            version = int(data.get("version", 1))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Versi file proyek tidak valid.") from exc
+        if version != 1:
             raise ValueError("Versi file proyek belum didukung.")
-        videos = [MediaItem(**x) for x in data.get("videos", [])]
-        audios = [MediaItem(**x) for x in data.get("audios", [])]
+
+        def parse_media(items, label: str) -> list[MediaItem]:
+            if not isinstance(items, list):
+                raise ValueError(f"{label} proyek harus berupa daftar.")
+            result: list[MediaItem] = []
+            for index, raw in enumerate(items, start=1):
+                if not isinstance(raw, dict):
+                    raise ValueError(f"{label} #{index} tidak valid.")
+                path = raw.get("path")
+                if not isinstance(path, str) or not path.strip():
+                    raise ValueError(f"Path {label.lower()} #{index} tidak valid.")
+                try:
+                    duration = float(raw.get("duration", 0.0))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Durasi {label.lower()} #{index} tidak valid."
+                    ) from exc
+                if not math.isfinite(duration) or duration < 0:
+                    raise ValueError(f"Durasi {label.lower()} #{index} tidak valid.")
+                result.append(MediaItem(path=path, duration=duration))
+            return result
+
+        videos = parse_media(data.get("videos", []), "Video")
+        audios = parse_media(data.get("audios", []), "Audio")
+
         settings_data = data.get("settings", {})
-        valid_fields = ProjectSettings.__dataclass_fields__
-        settings = ProjectSettings(**{k: v for k, v in settings_data.items() if k in valid_fields})
+        if not isinstance(settings_data, dict):
+            raise ValueError("Setting proyek tidak valid.")
+
+        defaults = ProjectSettings()
+        auto_speed = settings_data.get("auto_speed", defaults.auto_speed)
+        if not isinstance(auto_speed, bool):
+            raise ValueError("Setting auto_speed tidak valid.")
+
+        def finite_number(name: str, default: float) -> float:
+            try:
+                value = float(settings_data.get(name, default))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Setting {name} tidak valid.") from exc
+            if not math.isfinite(value):
+                raise ValueError(f"Setting {name} tidak valid.")
+            return value
+
+        manual_speed = finite_number("manual_speed", defaults.manual_speed)
+        min_speed = finite_number("min_speed", defaults.min_speed)
+        if not 0.05 <= manual_speed <= 2.0:
+            raise ValueError("Setting manual_speed harus 0.05–2.0.")
+        if not 0.05 <= min_speed <= 1.0:
+            raise ValueError("Setting min_speed harus 0.05–1.0.")
+
+        loop_mode = settings_data.get("loop_mode", defaults.loop_mode)
+        if loop_mode not in {"auto", "loop", "pingpong", "none"}:
+            raise ValueError("Setting loop_mode tidak valid.")
+
+        def valid_int(name: str, default: int) -> int:
+            raw = settings_data.get(name, default)
+            if isinstance(raw, bool):
+                raise ValueError(f"Setting {name} tidak valid.")
+            try:
+                return int(raw)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Setting {name} tidak valid.") from exc
+
+        width = valid_int("width", defaults.width)
+        height = valid_int("height", defaults.height)
+        fps = valid_int("fps", defaults.fps)
+        if not 320 <= width <= 7680 or not 240 <= height <= 4320 or width % 2 or height % 2:
+            raise ValueError("Resolusi proyek tidak valid.")
+        if fps not in {24, 25, 30, 50, 60}:
+            raise ValueError("FPS proyek tidak valid.")
+
+        codec = settings_data.get("codec", defaults.codec)
+        if codec not in {"h264", "h265"}:
+            raise ValueError("Codec proyek tidak valid.")
+
+        video_bitrate = settings_data.get("video_bitrate", defaults.video_bitrate)
+        audio_bitrate = settings_data.get("audio_bitrate", defaults.audio_bitrate)
+        if not isinstance(video_bitrate, str) or not video_bitrate.strip():
+            raise ValueError("Video bitrate proyek tidak valid.")
+        if not isinstance(audio_bitrate, str) or not audio_bitrate.strip():
+            raise ValueError("Audio bitrate proyek tidak valid.")
+
+        settings = ProjectSettings(
+            auto_speed=auto_speed,
+            manual_speed=manual_speed,
+            min_speed=min_speed,
+            loop_mode=loop_mode,
+            width=width,
+            height=height,
+            fps=fps,
+            codec=codec,
+            video_bitrate=video_bitrate,
+            audio_bitrate=audio_bitrate,
+        )
         return cls(videos=videos, audios=audios, settings=settings)
