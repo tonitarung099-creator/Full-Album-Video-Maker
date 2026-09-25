@@ -108,6 +108,7 @@ class FFmpegRenderer:
             self._build_final(source_video, album_audio, destination, need_loop, log)
 
         self._write_chapters(dest_path.with_name("YouTube_Chapter.txt"))
+        self._write_tracklist(dest_path.with_name("Tracklist.txt"))
         return destination
 
     def _encoder_name(self) -> str:
@@ -270,14 +271,25 @@ class FFmpegRenderer:
         ]
         self._run(args, log)
 
+    @staticmethod
+    def _stamp(seconds: float) -> str:
+        total = int(round(seconds))
+        h, rem = divmod(total, 3600)
+        m, sec = divmod(rem, 60)
+        return f"{h:02d}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
+
     def _write_chapters(self, path: Path) -> None:
         current = 0.0
         lines: list[str] = []
         for item in self.project.audios:
-            total = int(round(current))
-            h, rem = divmod(total, 3600)
-            m, sec = divmod(rem, 60)
-            stamp = f"{h:02d}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
-            lines.append(f"{stamp} {Path(item.path).stem}")
+            lines.append(f"{self._stamp(current)} {Path(item.path).stem}")
             current += item.duration
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _write_tracklist(self, path: Path) -> None:
+        lines = []
+        for index, item in enumerate(self.project.audios, start=1):
+            lines.append(
+                f"{index:02d}. {Path(item.path).stem}  [{self._stamp(item.duration)}]"
+            )
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
