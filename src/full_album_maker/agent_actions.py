@@ -72,30 +72,16 @@ class AppIntentExecutor:
 
     def execute(self, actions: list[AgentAction]) -> ActionExecution:
         result = ActionExecution()
+        build_requested = any(action.name == "auto_build_timeline" for action in actions)
 
+        # Gemini is instructed to put settings before auto_build_timeline, but
+        # function-call ordering is not a safety boundary. Apply every project
+        # mutation first, then build exactly once from the final project state.
         for action in actions:
             name = action.name
             args = action.args
 
             if name == "auto_build_timeline":
-                plan = TimelineEngine().build(self.project)
-                path = save_timeline(self.timeline_output_path, plan)
-                result.timeline_plan = plan
-                result.timeline_path = path
-                result.messages.append(
-                    "✓ Auto Timeline dibuat lokal: "
-                    f"{len(plan.video_clips)} clip video, "
-                    f"{len(plan.audio_clips)} clip audio, "
-                    f"speed {plan.planned_speed:.3f}x."
-                )
-                if plan.auto_cut_seconds > 0:
-                    result.messages.append(
-                        f"✓ Auto Cut: {plan.auto_cut_seconds:.3f} detik."
-                    )
-                if plan.loop_fill_seconds > 0:
-                    result.messages.append(
-                        f"✓ Tambahan {plan.loop_mode}: {plan.loop_fill_seconds:.3f} detik."
-                    )
                 continue
 
             if name == "validate_project":
@@ -153,5 +139,25 @@ class AppIntentExecutor:
                 result.messages.append(f"✓ Lagu posisi {args['position']} dihapus.")
             elif name == "remove_video":
                 result.messages.append(f"✓ Video posisi {args['position']} dihapus.")
+
+        if build_requested:
+            plan = TimelineEngine().build(self.project)
+            path = save_timeline(self.timeline_output_path, plan)
+            result.timeline_plan = plan
+            result.timeline_path = path
+            result.messages.append(
+                "✓ Auto Timeline dibuat lokal: "
+                f"{len(plan.video_clips)} clip video, "
+                f"{len(plan.audio_clips)} clip audio, "
+                f"speed {plan.planned_speed:.3f}x."
+            )
+            if plan.auto_cut_seconds > 0:
+                result.messages.append(
+                    f"✓ Auto Cut: {plan.auto_cut_seconds:.3f} detik."
+                )
+            if plan.loop_fill_seconds > 0:
+                result.messages.append(
+                    f"✓ Tambahan {plan.loop_mode}: {plan.loop_fill_seconds:.3f} detik."
+                )
 
         return result
