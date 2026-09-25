@@ -387,6 +387,7 @@ class MainWindow(QMainWindow):
         for key in ("video", "album", "speed", "result", "loop"):
             label = QLabel()
             label.setObjectName("statusChip")
+            label.setMinimumHeight(24)
             label.setAlignment(Qt.AlignCenter)
             self.status_labels[key] = label
             row.addWidget(label, 1)
