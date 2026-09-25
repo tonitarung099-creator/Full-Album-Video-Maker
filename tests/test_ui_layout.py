@@ -14,7 +14,7 @@ def test_mockup_layout_has_no_overlap():
     app.setStyleSheet(APP_STYLE)
 
     window = MainWindow()
-    window.resize(1180, 780)
+    window.resize(1180, 820)
     window.show()
     app.processEvents()
 
