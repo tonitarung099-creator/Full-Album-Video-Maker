@@ -15,7 +15,7 @@ def test_modern_dashboard_layout_has_no_overlap():
     window.show()
     app.processEvents()
 
-    assert asset_path("logo.png").exists()
+    assert asset_path("logo.svg").exists()
     assert window.splitter.count() == 3
 
     panels = [window.splitter.widget(i) for i in range(3)]
