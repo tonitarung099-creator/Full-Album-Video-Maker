@@ -10,17 +10,42 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: read
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install dependencies and test
+      - name: Install Python dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
+
+      - name: Download GPL FFmpeg with libx264 and libx265
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_unpack
+
+          $ffmpeg = Get-ChildItem ffmpeg_unpack -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $ffprobe = Get-ChildItem ffmpeg_unpack -Recurse -Filter ffprobe.exe | Select-Object -First 1
+          if (-not $ffmpeg -or -not $ffprobe) { throw "ffmpeg.exe atau ffprobe.exe tidak ditemukan." }
+
+          New-Item -ItemType Directory -Force "tools\ffmpeg" | Out-Null
+          Copy-Item $ffmpeg.FullName "tools\ffmpeg\ffmpeg.exe"
+          Copy-Item $ffprobe.FullName "tools\ffmpeg\ffprobe.exe"
+
+          $encoders = & "tools\ffmpeg\ffmpeg.exe" -hide_banner -encoders 2>&1 | Out-String
+          if ($encoders -notmatch "libx264") { throw "FFmpeg build tidak memiliki libx264." }
+          if ($encoders -notmatch "libx265") { throw "FFmpeg build tidak memiliki libx265." }
+
+      - name: Run unit and real FFmpeg render tests
+        shell: pwsh
+        run: |
           python -m pytest -q
 
       - name: Build one-folder EXE
@@ -28,19 +53,20 @@ jobs:
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Full Album Maker" --paths "$PWD\src" "$PWD\src\full_album_maker\main.py"
 
-      - name: Bundle LGPL FFmpeg
+      - name: Bundle FFmpeg and notices
         shell: pwsh
         run: |
-          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip"
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
-          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_unpack
-          $ffmpeg = Get-ChildItem ffmpeg_unpack -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-          $ffprobe = Get-ChildItem ffmpeg_unpack -Recurse -Filter ffprobe.exe | Select-Object -First 1
           New-Item -ItemType Directory -Force "dist\Full Album Maker\tools\ffmpeg" | Out-Null
-          Copy-Item $ffmpeg.FullName "dist\Full Album Maker\tools\ffmpeg\ffmpeg.exe"
-          Copy-Item $ffprobe.FullName "dist\Full Album Maker\tools\ffmpeg\ffprobe.exe"
+          Copy-Item "tools\ffmpeg\ffmpeg.exe" "dist\Full Album Maker\tools\ffmpeg\ffmpeg.exe"
+          Copy-Item "tools\ffmpeg\ffprobe.exe" "dist\Full Album Maker\tools\ffmpeg\ffprobe.exe"
           Copy-Item LICENSE "dist\Full Album Maker\LICENSE.txt"
           Copy-Item THIRD_PARTY_NOTICES.md "dist\Full Album Maker\THIRD_PARTY_NOTICES.md"
+
+          $ffLicense = Get-ChildItem ffmpeg_unpack -Recurse -File | Where-Object { $_.Name -eq "LICENSE.txt" } | Select-Object -First 1
+          $ffReadme = Get-ChildItem ffmpeg_unpack -Recurse -File | Where-Object { $_.Name -eq "README.txt" } | Select-Object -First 1
+          if ($ffLicense) { Copy-Item $ffLicense.FullName "dist\Full Album Maker\FFMPEG-LICENSE.txt" }
+          if ($ffReadme) { Copy-Item $ffReadme.FullName "dist\Full Album Maker\FFMPEG-README.txt" }
+
           New-Item -ItemType Directory -Force "dist\Full Album Maker\data" | Out-Null
           New-Item -ItemType Directory -Force "dist\Full Album Maker\temp" | Out-Null
           New-Item -ItemType Directory -Force "dist\Full Album Maker\output" | Out-Null
@@ -48,7 +74,7 @@ jobs:
       - name: Create portable ZIP
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist\Full Album Maker\*" -DestinationPath "Full-Album-Maker-Windows-Portable.zip"
+          Compress-Archive -Path "dist\Full Album Maker" -DestinationPath "Full-Album-Maker-Windows-Portable.zip"
 
       - uses: actions/upload-artifact@v4
         with:
