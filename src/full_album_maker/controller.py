@@ -104,11 +104,36 @@ class ProjectController:
         elif name == "sort_audio_by_name":
             self.project.sort_audio_by_name()
 
+        elif name == "sort_video_by_name":
+            self.project.videos.sort(key=lambda x: x.name.casefold())
+
         elif name == "move_audio":
             self.project.move_audio(
                 int(args["from_position"]),
                 int(args["to_position"]),
             )
+
+        elif name == "move_video":
+            from_position = int(args["from_position"])
+            to_position = int(args["to_position"])
+            if not 1 <= from_position <= len(self.project.videos):
+                raise ValueError("Posisi video asal tidak valid.")
+            if not 1 <= to_position <= len(self.project.videos):
+                raise ValueError("Posisi video tujuan tidak valid.")
+            item = self.project.videos.pop(from_position - 1)
+            self.project.videos.insert(to_position - 1, item)
+
+        elif name == "remove_audio":
+            position = int(args["position"])
+            if not 1 <= position <= len(self.project.audios):
+                raise ValueError("Posisi lagu tidak valid.")
+            del self.project.audios[position - 1]
+
+        elif name == "remove_video":
+            position = int(args["position"])
+            if not 1 <= position <= len(self.project.videos):
+                raise ValueError("Posisi video tidak valid.")
+            del self.project.videos[position - 1]
 
         else:
             raise ValueError(f"Tool tidak dikenal: {name}")
