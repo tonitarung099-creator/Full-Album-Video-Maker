@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -7,8 +8,18 @@ from typing import Callable
 
 from .paths import ffmpeg_path, output_dir, temp_dir
 from .project import Project
+from .timeline import (
+    EPSILON,
+    TimelinePlan,
+    VideoTimelineClip,
+    load_timeline,
+    save_timeline,
+    validate_timeline_against_project,
+)
 
-PINGPONG_MAX_RAW_BYTES = 512 * 1024 * 1024
+# FFmpeg's reverse filter buffers frames. Reverse clips are therefore rendered
+# in bounded chunks so a long Ping-Pong timeline does not require unbounded RAM.
+REVERSE_CHUNK_RAW_BYTES = 384 * 1024 * 1024
 
 
 class RenderError(RuntimeError):
@@ -19,14 +30,55 @@ def _q(path: str) -> str:
     return str(Path(path).resolve())
 
 
+def _concat_path(path: Path) -> str:
+    value = path.resolve().as_posix()
+    return value.replace("'", "'\\''")
+
+
 class FFmpegRenderer:
-    def __init__(self, project: Project) -> None:
+    """Renders exactly one validated TimelinePlan.
+
+    Project media lists are used only to validate that the TimelinePlan still
+    belongs to the same project and to obtain output encoding settings.
+    Clip order, source ranges, speed, direction and final duration all come
+    from TimelinePlan.
+    """
+
+    def __init__(
+        self,
+        project: Project,
+        timeline: TimelinePlan | str | Path | None = None,
+    ) -> None:
         self.project = project
+
+        if timeline is None:
+            raise RenderError(
+                "Timeline belum tersedia. Klik AUTO SUSUN TIMELINE sebelum render."
+            )
+        try:
+            self.timeline = (
+                load_timeline(str(timeline))
+                if isinstance(timeline, (str, Path))
+                else timeline
+            )
+        except Exception as exc:
+            raise RenderError(f"Gagal membaca Timeline JSON: {exc}") from exc
+
+        errors = validate_timeline_against_project(self.timeline, self.project)
+        if errors:
+            raise RenderError(
+                "Timeline tidak valid untuk proyek ini:\n• " + "\n• ".join(errors)
+            )
+
         self.ffmpeg = ffmpeg_path()
         if not self.ffmpeg:
             raise RenderError("FFmpeg tidak ditemukan.")
 
-    def _run(self, args: list[str], log: Callable[[str], None] | None = None) -> None:
+    def _run(
+        self,
+        args: list[str],
+        log: Callable[[str], None] | None = None,
+    ) -> None:
         if log:
             log("Menjalankan FFmpeg…")
         proc = subprocess.Popen(
@@ -44,7 +96,12 @@ class FFmpegRenderer:
             if line:
                 last_lines.append(line)
                 last_lines = last_lines[-20:]
-            if log and ("time=" in line or "Error" in line or "error" in line):
+            if log and (
+                "time=" in line
+                or "Error" in line
+                or "error" in line
+                or "Invalid" in line
+            ):
                 log(line)
         code = proc.wait()
         if code != 0:
@@ -59,56 +116,62 @@ class FFmpegRenderer:
         destination: str | None = None,
         log: Callable[[str], None] | None = None,
     ) -> str:
-        p = self.project
-        if not p.videos:
-            raise RenderError("Belum ada footage video.")
-        if not p.audios:
-            raise RenderError("Belum ada lagu.")
-        if p.total_video_duration <= 0:
-            raise RenderError("Durasi footage tidak valid.")
-        if p.total_audio_duration <= 0:
-            raise RenderError("Durasi album tidak valid.")
+        plan = self.timeline
+
+        errors = validate_timeline_against_project(plan, self.project)
+        if errors:
+            raise RenderError(
+                "Timeline berubah/tidak valid sebelum render:\n• "
+                + "\n• ".join(errors)
+            )
+
+        source_paths = {
+            Path(clip.source).resolve()
+            for clip in [*plan.video_clips, *plan.audio_clips]
+        }
+        missing = [str(path) for path in source_paths if not path.exists()]
+        if missing:
+            preview = "\n".join(f"• {x}" for x in missing[:8])
+            more = (
+                f"\n• …dan {len(missing) - 8} file lain"
+                if len(missing) > 8
+                else ""
+            )
+            raise RenderError(f"File sumber timeline tidak ditemukan:\n{preview}{more}")
 
         self._ensure_encoder()
 
         destination = destination or str(output_dir() / "FULL_ALBUM_FINAL.mp4")
         dest_path = Path(destination).resolve()
-        source_paths = {Path(x.path).resolve() for x in [*p.videos, *p.audios]}
         if dest_path in source_paths:
             raise RenderError("Lokasi output tidak boleh sama dengan file sumber.")
 
-        need_loop = p.needs_loop()
-        if need_loop and p.settings.loop_mode == "none":
-            raise RenderError(
-                "Footage lebih pendek dari album tetapi mode loop dimatikan. "
-                "Aktifkan Auto, Loop, atau Ping-pong."
+        if log:
+            log(
+                "Render memakai TimelinePlan sebagai sumber kebenaran: "
+                f"{len(plan.video_clips)} clip video, "
+                f"{len(plan.audio_clips)} clip audio, "
+                f"durasi {plan.duration:.3f} detik."
             )
 
         root = temp_dir()
         with tempfile.TemporaryDirectory(prefix="fam_render_", dir=root) as work_dir:
             work = Path(work_dir)
-            album_audio = work / "album_audio.m4a"
-            base_video = work / "footage_base.mp4"
-            ping_video = work / "footage_pingpong.mp4"
+            album_audio = work / "timeline_audio.m4a"
+            timeline_video = work / "timeline_video.mp4"
 
-            self._build_audio(album_audio, log)
-            self._build_video(base_video, log)
-
-            source_video = base_video
-            if need_loop and p.settings.loop_mode == "pingpong":
-                if self._pingpong_is_safe():
-                    self._build_pingpong(base_video, ping_video, log)
-                    source_video = ping_video
-                elif log:
-                    log(
-                        "Ping-pong dialihkan ke loop biasa untuk mencegah pemakaian RAM "
-                        "berlebihan pada footage/resolusi ini."
-                    )
-
-            self._build_final(source_video, album_audio, destination, need_loop, log)
+            self._build_audio_from_timeline(album_audio, log)
+            self._build_video_from_timeline(timeline_video, work, log)
+            self._build_final(timeline_video, album_audio, destination, log)
 
         self._write_chapters(dest_path.with_name("YouTube_Chapter.txt"))
         self._write_tracklist(dest_path.with_name("Tracklist.txt"))
+        save_timeline(
+            str(dest_path.with_name("Timeline_Final.json")),
+            self.timeline,
+        )
+        if log:
+            log("Timeline_Final.json disimpan di folder hasil render.")
         return destination
 
     def _encoder_name(self) -> str:
@@ -128,6 +191,7 @@ class FFmpegRenderer:
             )
         except Exception as exc:
             raise RenderError(f"Gagal memeriksa encoder FFmpeg: {exc}") from exc
+
         encoder_output = (result.stdout or "") + "\n" + (result.stderr or "")
         if encoder not in encoder_output:
             raise RenderError(
@@ -135,22 +199,29 @@ class FFmpegRenderer:
                 "Gunakan FFmpeg build GPL yang menyertakan libx264/libx265."
             )
 
-    def _pingpong_is_safe(self) -> bool:
-        s = self.project.settings
-        seconds = max(0.0, self.project.adjusted_video_duration())
-        estimated_raw = seconds * s.width * s.height * 1.5 * s.fps
-        return estimated_raw <= PINGPONG_MAX_RAW_BYTES
-
-    def _build_audio(self, out: Path, log=None) -> None:
+    def _build_audio_from_timeline(self, out: Path, log=None) -> None:
+        clips = self.timeline.audio_clips
         args = [self.ffmpeg, "-y"]
         filters: list[str] = []
         labels: list[str] = []
 
-        for i, item in enumerate(self.project.audios):
-            args += ["-i", _q(item.path)]
+        for i, clip in enumerate(clips):
+            source_duration = clip.source_out - clip.source_in
+            args += [
+                "-ss",
+                f"{clip.source_in:.6f}",
+                "-t",
+                f"{source_duration:.6f}",
+                "-i",
+                _q(clip.source),
+            ]
             filters.append(
-                f"[{i}:a]aresample=48000,"
-                f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[a{i}]"
+                f"[{i}:a]"
+                "aresample=48000,"
+                "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+                "asetpts=PTS-STARTPTS,"
+                f"atrim=duration={clip.timeline_duration:.6f},"
+                f"asetpts=PTS-STARTPTS[a{i}]"
             )
             labels.append(f"[a{i}]")
 
@@ -162,82 +233,221 @@ class FFmpegRenderer:
             ";".join(filters),
             "-map",
             "[aout]",
+            "-vn",
             "-c:a",
             "aac",
             "-b:a",
             self.project.settings.audio_bitrate,
-            str(out),
-        ]
-        self._run(args, log)
-
-    def _build_video(self, out: Path, log=None) -> None:
-        s = self.project.settings
-        args = [self.ffmpeg, "-y"]
-        filters: list[str] = []
-        labels: list[str] = []
-
-        for i, item in enumerate(self.project.videos):
-            args += ["-i", _q(item.path)]
-            filters.append(
-                f"[{i}:v]"
-                f"scale={s.width}:{s.height}:force_original_aspect_ratio=decrease,"
-                f"pad={s.width}:{s.height}:(ow-iw)/2:(oh-ih)/2,"
-                f"setsar=1,fps={s.fps},format=yuv420p,setpts=PTS-STARTPTS[v{i}]"
-            )
-            labels.append(f"[v{i}]")
-
-        filters.append(
-            "".join(labels) + f"concat=n={len(labels)}:v=1:a=0[vcat]"
-        )
-        filters.append(
-            f"[vcat]setpts=PTS/{self.project.planned_speed():.8f}[vout]"
-        )
-
-        codec = self._encoder_name()
-        args += [
-            "-filter_complex",
-            ";".join(filters),
-            "-map",
-            "[vout]",
-            "-an",
-            "-c:v",
-            codec,
-            "-preset",
-            "medium",
-            "-b:v",
-            s.video_bitrate,
-            "-pix_fmt",
-            "yuv420p",
-            str(out),
-        ]
-        self._run(args, log)
-
-    def _build_pingpong(self, base: Path, out: Path, log=None) -> None:
-        s = self.project.settings
-        codec = self._encoder_name()
-        args = [
-            self.ffmpeg,
-            "-y",
-            "-i",
-            str(base),
-            "-filter_complex",
-            "[0:v]split[f][r];[r]reverse,setpts=PTS-STARTPTS[rev];"
-            "[f][rev]concat=n=2:v=1:a=0[v]",
-            "-map",
-            "[v]",
-            "-an",
-            "-c:v",
-            codec,
-            "-preset",
-            "medium",
-            "-b:v",
-            s.video_bitrate,
-            "-pix_fmt",
-            "yuv420p",
+            "-t",
+            f"{self.timeline.duration:.6f}",
             str(out),
         ]
         if log:
-            log("Membuat ping-pong untuk footage yang aman diproses di RAM.")
+            log("Menyusun audio persis dari Audio Timeline.")
+        self._run(args, log)
+
+    def _build_video_from_timeline(
+        self,
+        out: Path,
+        work: Path,
+        log=None,
+    ) -> None:
+        clip_dir = work / "video_clips"
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        files: list[Path] = []
+
+        for index, clip in enumerate(self.timeline.video_clips):
+            clip_out = clip_dir / f"clip_{index:05d}.mp4"
+            if log:
+                log(
+                    f"Video timeline {index + 1}/{len(self.timeline.video_clips)}: "
+                    f"{clip.name} {clip.source_in:.3f}–{clip.source_out:.3f}s "
+                    f"@ {clip.speed:.3f}x {clip.direction}."
+                )
+
+            if clip.direction == "reverse":
+                self._build_reverse_clip(clip, clip_out, clip_dir, index, log)
+            else:
+                self._encode_video_segment(
+                    source=clip.source,
+                    source_in=clip.source_in,
+                    source_out=clip.source_out,
+                    speed=clip.speed,
+                    timeline_duration=clip.timeline_duration,
+                    reverse=False,
+                    out=clip_out,
+                    log=log,
+                )
+            files.append(clip_out)
+
+        self._concat_video_files(files, out, work / "video_concat.txt", log)
+
+    def _encode_video_segment(
+        self,
+        *,
+        source: str,
+        source_in: float,
+        source_out: float,
+        speed: float,
+        timeline_duration: float,
+        reverse: bool,
+        out: Path,
+        log=None,
+    ) -> None:
+        if source_out <= source_in + EPSILON:
+            raise RenderError("Video timeline memiliki source range kosong.")
+        if speed <= 0:
+            raise RenderError("Video timeline memiliki speed tidak valid.")
+
+        settings = self.project.settings
+        source_duration = source_out - source_in
+        filters = [
+            (
+                f"scale={settings.width}:{settings.height}:"
+                "force_original_aspect_ratio=decrease"
+            ),
+            (
+                f"pad={settings.width}:{settings.height}:"
+                "(ow-iw)/2:(oh-ih)/2"
+            ),
+            "setsar=1",
+            f"fps={settings.fps}",
+            "format=yuv420p",
+        ]
+        if reverse:
+            filters.append("reverse")
+        filters += [
+            f"setpts=(PTS-STARTPTS)/{speed:.10f}",
+            f"trim=duration={timeline_duration:.6f}",
+            "setpts=PTS-STARTPTS",
+        ]
+
+        args = [
+            self.ffmpeg,
+            "-y",
+            "-ss",
+            f"{source_in:.6f}",
+            "-t",
+            f"{source_duration:.6f}",
+            "-i",
+            _q(source),
+            "-vf",
+            ",".join(filters),
+            "-an",
+            "-c:v",
+            self._encoder_name(),
+            "-preset",
+            "medium",
+            "-b:v",
+            settings.video_bitrate,
+            "-pix_fmt",
+            "yuv420p",
+            "-r",
+            str(settings.fps),
+            "-t",
+            f"{timeline_duration:.6f}",
+            str(out),
+        ]
+        self._run(args, log)
+
+    def _reverse_chunk_seconds(self) -> float:
+        settings = self.project.settings
+        bytes_per_second = (
+            float(settings.width)
+            * float(settings.height)
+            * 1.5
+            * float(settings.fps)
+        )
+        if bytes_per_second <= 0:
+            return 1.0
+        seconds = REVERSE_CHUNK_RAW_BYTES / bytes_per_second
+        return max(0.25, min(5.0, seconds))
+
+    def _build_reverse_clip(
+        self,
+        clip: VideoTimelineClip,
+        out: Path,
+        clip_dir: Path,
+        clip_index: int,
+        log=None,
+    ) -> None:
+        chunk_seconds = self._reverse_chunk_seconds()
+        part_dir = clip_dir / f"reverse_{clip_index:05d}"
+        part_dir.mkdir(parents=True, exist_ok=True)
+
+        parts: list[Path] = []
+        source_end = clip.source_out
+        part_index = 0
+
+        while source_end > clip.source_in + EPSILON:
+            source_start = max(clip.source_in, source_end - chunk_seconds)
+            source_duration = source_end - source_start
+            timeline_duration = source_duration / clip.speed
+            part = part_dir / f"part_{part_index:05d}.mp4"
+
+            self._encode_video_segment(
+                source=clip.source,
+                source_in=source_start,
+                source_out=source_end,
+                speed=clip.speed,
+                timeline_duration=timeline_duration,
+                reverse=True,
+                out=part,
+                log=log,
+            )
+            parts.append(part)
+            source_end = source_start
+            part_index += 1
+
+        if not parts:
+            raise RenderError("Reverse timeline tidak menghasilkan bagian video.")
+
+        if log and len(parts) > 1:
+            log(
+                f"Ping-Pong diproses dalam {len(parts)} chunk bounded-memory "
+                f"(maks. sekitar {chunk_seconds:.2f}s source/chunk)."
+            )
+        self._concat_video_files(
+            parts,
+            out,
+            part_dir / "reverse_concat.txt",
+            log,
+        )
+
+    def _concat_video_files(
+        self,
+        files: list[Path],
+        out: Path,
+        list_file: Path,
+        log=None,
+    ) -> None:
+        if not files:
+            raise RenderError("Timeline tidak menghasilkan clip video.")
+
+        if len(files) == 1:
+            shutil.copyfile(files[0], out)
+            return
+
+        list_file.write_text(
+            "\n".join(f"file '{_concat_path(path)}'" for path in files) + "\n",
+            encoding="utf-8",
+        )
+        args = [
+            self.ffmpeg,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_file),
+            "-an",
+            "-c:v",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(out),
+        ]
         self._run(args, log)
 
     def _build_final(
@@ -245,22 +455,21 @@ class FFmpegRenderer:
         video: Path,
         audio: Path,
         dest: str,
-        need_loop: bool,
         log=None,
     ) -> None:
-        s = self.project.settings
-        args = [self.ffmpeg, "-y"]
-        if need_loop and s.loop_mode in {"auto", "loop", "pingpong"}:
-            args += ["-stream_loop", "-1"]
-
-        args += ["-i", str(video), "-i", str(audio)]
-        args += [
+        args = [
+            self.ffmpeg,
+            "-y",
+            "-i",
+            str(video),
+            "-i",
+            str(audio),
             "-map",
             "0:v:0",
             "-map",
             "1:a:0",
             "-t",
-            f"{self.project.total_audio_duration:.3f}",
+            f"{self.timeline.duration:.6f}",
             "-c:v",
             "copy",
             "-c:a",
@@ -269,6 +478,8 @@ class FFmpegRenderer:
             "+faststart",
             dest,
         ]
+        if log:
+            log("Mux final mengikuti durasi TimelinePlan.")
         self._run(args, log)
 
     @staticmethod
@@ -279,17 +490,15 @@ class FFmpegRenderer:
         return f"{h:02d}:{m:02d}:{sec:02d}" if h else f"{m:02d}:{sec:02d}"
 
     def _write_chapters(self, path: Path) -> None:
-        current = 0.0
-        lines: list[str] = []
-        for item in self.project.audios:
-            lines.append(f"{self._stamp(current)} {Path(item.path).stem}")
-            current += item.duration
+        lines = [
+            f"{self._stamp(clip.timeline_in)} {clip.name}"
+            for clip in self.timeline.audio_clips
+        ]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _write_tracklist(self, path: Path) -> None:
-        lines = []
-        for index, item in enumerate(self.project.audios, start=1):
-            lines.append(
-                f"{index:02d}. {Path(item.path).stem}  [{self._stamp(item.duration)}]"
-            )
+        lines = [
+            f"{index:02d}. {clip.name}  [{self._stamp(clip.timeline_duration)}]"
+            for index, clip in enumerate(self.timeline.audio_clips, start=1)
+        ]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
