@@ -86,6 +86,7 @@ class MainWindow(QMainWindow):
         self.project = Project()
         self.controller = ProjectController(self.project)
         self.pool = GeminiKeyPool()
+        self.agent = None
         self.bridge = Bridge()
         self.bridge.agent_message.connect(self._agent_message)
         self.bridge.render_log.connect(self._render_log)
@@ -307,6 +308,33 @@ class MainWindow(QMainWindow):
             f"Speed rencana: {p.planned_speed():.3f}×   |   Hasil footage: {fmt(p.adjusted_video_duration())}   |   "
             f"Perlu loop: {'YA' if p.needs_loop() else 'TIDAK'}"
         )
+        settings = p.settings
+        sync_widgets = [
+            self.speed_mode, self.manual_speed, self.min_speed,
+            self.loop_mode, self.resolution, self.fps, self.codec,
+        ]
+        for widget in sync_widgets:
+            widget.blockSignals(True)
+        try:
+            self.speed_mode.setCurrentText("Otomatis" if settings.auto_speed else "Manual")
+            self.manual_speed.setValue(settings.manual_speed)
+            self.min_speed.setValue(settings.min_speed)
+            loop_index = self.loop_mode.findData(settings.loop_mode)
+            if loop_index >= 0:
+                self.loop_mode.setCurrentIndex(loop_index)
+            resolution_index = self.resolution.findData((settings.width, settings.height))
+            if resolution_index >= 0:
+                self.resolution.setCurrentIndex(resolution_index)
+            fps_index = self.fps.findData(settings.fps)
+            if fps_index >= 0:
+                self.fps.setCurrentIndex(fps_index)
+            codec_index = self.codec.findData(settings.codec)
+            if codec_index >= 0:
+                self.codec.setCurrentIndex(codec_index)
+        finally:
+            for widget in sync_widgets:
+                widget.blockSignals(False)
+
         s = self.pool.summary()
         self.key_status.setText(f"Gemini: {s['ready']} siap / {s['total']} key")
 
@@ -324,7 +352,9 @@ class MainWindow(QMainWindow):
 
         def work():
             try:
-                answer = GeminiAgent(self.pool, self.controller, model=model).ask(text)
+                if self.agent is None or self.agent.model != model:
+                    self.agent = GeminiAgent(self.pool, self.controller, model=model)
+                answer = self.agent.ask(text)
                 self.bridge.agent_message.emit(answer)
                 self.bridge.refresh.emit()
             except Exception as exc:
