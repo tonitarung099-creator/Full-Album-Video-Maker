@@ -38,7 +38,7 @@ def _probe_stream_duration(path: Path, selector: str | None) -> float:
         cmd += ["-select_streams", selector]
     cmd += [
         "-show_entries",
-        "stream=duration:format=duration",
+        "stream=duration:stream_tags=DURATION:format=duration",
         "-of",
         "json",
         str(path),
@@ -59,6 +59,9 @@ def _probe_stream_duration(path: Path, selector: str | None) -> float:
             value = _positive_float(stream.get("duration"))
             if value is not None:
                 return value
+            tagged = _parse_ffmpeg_time((stream.get("tags") or {}).get("DURATION", ""))
+            if tagged is not None:
+                return tagged
         value = _positive_float((payload.get("format") or {}).get("duration"))
         if value is not None:
             return value
