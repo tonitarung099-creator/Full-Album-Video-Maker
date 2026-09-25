@@ -43,13 +43,28 @@ def _blob(data: bytes):
     buf = ctypes.create_string_buffer(data)
     return _DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte))), buf
 
+def _configure_dpapi():
+    crypt32 = ctypes.windll.crypt32
+    kernel32 = ctypes.windll.kernel32
+    blob_ptr = ctypes.POINTER(_DATA_BLOB)
+    crypt32.CryptProtectData.argtypes = [
+        blob_ptr, ctypes.wintypes.LPCWSTR, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_void_p, ctypes.wintypes.DWORD, blob_ptr,
+    ]
+    crypt32.CryptProtectData.restype = ctypes.wintypes.BOOL
+    crypt32.CryptUnprotectData.argtypes = [
+        blob_ptr, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+        ctypes.c_void_p, ctypes.wintypes.DWORD, blob_ptr,
+    ]
+    crypt32.CryptUnprotectData.restype = ctypes.wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    return crypt32, kernel32
+
 def _dpapi_encrypt(data: bytes) -> bytes:
     if os.name != "nt":
         return b"DEV0" + data
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
-    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
-    kernel32.LocalFree.restype = ctypes.c_void_p
+    crypt32, kernel32 = _configure_dpapi()
     in_blob, keep = _blob(data)
     out_blob = _DATA_BLOB()
     ok = crypt32.CryptProtectData(ctypes.byref(in_blob), "FullAlbumMaker", None, None, None, 0, ctypes.byref(out_blob))
@@ -65,8 +80,7 @@ def _dpapi_decrypt(data: bytes) -> bytes:
         if not data.startswith(b"DEV0"):
             raise RuntimeError("Vault hanya bisa dibuka pada Windows yang membuatnya.")
         return data[4:]
-    crypt32 = ctypes.windll.crypt32
-    kernel32 = ctypes.windll.kernel32
+    crypt32, kernel32 = _configure_dpapi()
     in_blob, keep = _blob(data)
     out_blob = _DATA_BLOB()
     ok = crypt32.CryptUnprotectData(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob))
