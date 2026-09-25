@@ -1145,6 +1145,9 @@ class MainWindow(QMainWindow):
         self.timeline_status.style().unpolish(self.timeline_status)
         self.timeline_status.style().polish(self.timeline_status)
         self.timeline_preview.set_timeline(self.timeline_plan)
+        self.render_btn.setEnabled(
+            self.timeline_ready and self.timeline_plan is not None
+        )
 
         self.bottom_labels["footage"].setText(f"▣  Footage\n{fmt(p.total_video_duration)}")
         self.bottom_labels["album"].setText(f"♫  Album\n{fmt(album)}")
@@ -1223,10 +1226,16 @@ class MainWindow(QMainWindow):
         self.log.appendPlainText(text)
 
     def _render_done(self, path):
-        self.render_btn.setEnabled(True)
         self.render_btn.setText("▶  Render Full Album")
+        self.refresh()
         if path:
-            QMessageBox.information(self, "Render selesai", f"Video selesai:\n{path}")
+            QMessageBox.information(
+                self,
+                "Render selesai",
+                f"Video selesai:\n{path}\n\n"
+                "Render mengikuti TimelinePlan aktif. "
+                "Timeline_Final.json disimpan bersama hasil.",
+            )
 
     def _error(self, text):
         QMessageBox.critical(self, "Full Album Maker", text)
