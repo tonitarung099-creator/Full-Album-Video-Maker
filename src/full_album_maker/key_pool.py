@@ -159,19 +159,34 @@ class GeminiKeyPool:
         raise RuntimeError(f"Semua key sedang tidak tersedia. Coba lagi sekitar {wait} detik.")
 
     def request_json(self, url: str, payload: dict[str, Any], attempts: int | None = None, timeout: int = 90) -> dict[str, Any]:
-        max_attempts = attempts or max(1, len(self.records))
-        last_error = "Tidak ada key yang dapat digunakan."
-        tried: set[int] = set()
+        if not self.records:
+            raise RuntimeError("Belum ada Gemini API/Auth key.")
 
-        for _ in range(max_attempts):
-            try:
-                idx, rec = self._next()
-            except RuntimeError as exc:
-                last_error = str(exc)
-                break
-            if idx in tried and len(tried) >= len(self.records):
-                break
-            tried.add(idx)
+        now = time.time()
+        count = len(self.records)
+        ordered_indices = [
+            (self._cursor + offset) % count
+            for offset in range(count)
+            if self.records[(self._cursor + offset) % count].enabled
+            and now >= self.records[(self._cursor + offset) % count].cooldown_until
+        ]
+
+        if not ordered_indices:
+            enabled = [r for r in self.records if r.enabled]
+            if not enabled:
+                raise RuntimeError("Semua Gemini key sedang nonaktif.")
+            soonest = min(r.cooldown_until for r in enabled)
+            wait = max(0, int(soonest - now))
+            raise RuntimeError(f"Semua key sedang cooldown. Coba lagi sekitar {wait} detik.")
+
+        if attempts is not None:
+            ordered_indices = ordered_indices[:max(0, attempts)]
+
+        last_error = "Tidak ada key yang dapat digunakan."
+
+        for idx in ordered_indices:
+            rec = self.records[idx]
+            self._cursor = (idx + 1) % count
             request = urllib.request.Request(
                 url,
                 data=json.dumps(payload).encode("utf-8"),
@@ -184,27 +199,32 @@ class GeminiKeyPool:
                     result = json.loads(response.read().decode("utf-8"))
                     rec.failures = 0
                     rec.last_error = ""
+                    rec.cooldown_until = 0.0
                     self.save()
                     return result
             except urllib.error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")[:500]
                 rec.failures += 1
                 rec.last_error = f"HTTP {exc.code}: {body}"
-                last_error = f"Gemini HTTP {exc.code}"
+                last_error = f"Gemini HTTP {exc.code}: {body[:180]}"
+
                 if exc.code == 429:
                     rec.cooldown_until = time.time() + 60
-                elif exc.code in (401, 403):
+                elif exc.code == 401:
                     rec.enabled = False
+                elif exc.code == 403:
+                    rec.cooldown_until = time.time() + 300
                 elif 500 <= exc.code <= 599:
                     rec.cooldown_until = time.time() + 20
                 else:
                     self.save()
-                    raise RuntimeError(f"Gemini gagal: HTTP {exc.code}") from exc
+                    raise RuntimeError(last_error) from exc
                 self.save()
             except (urllib.error.URLError, TimeoutError) as exc:
                 rec.failures += 1
                 rec.last_error = str(exc)
                 rec.cooldown_until = time.time() + 10
-                last_error = str(exc)
+                last_error = f"Gemini jaringan: {exc}"
                 self.save()
+
         raise RuntimeError(last_error)
