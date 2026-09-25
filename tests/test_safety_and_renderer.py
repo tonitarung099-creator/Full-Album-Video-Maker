@@ -11,7 +11,7 @@ from full_album_maker.controller import ProjectController
 from full_album_maker.key_pool import GeminiKeyPool
 from full_album_maker.project import MediaItem, Project
 from full_album_maker.renderer import FFmpegRenderer, RenderError
-from full_album_maker.timeline import TimelineEngine
+from full_album_maker.timeline import TimelineEngine, save_timeline
 
 
 def test_controller_rejects_odd_resolution():
@@ -206,3 +206,16 @@ def test_controller_quality_validation():
             "set_quality",
             {"video_bitrate": "999M", "audio_bitrate": "320k"},
         )
+
+
+def test_renderer_can_load_valid_timeline_json(monkeypatch, tmp_path):
+    monkeypatch.setattr(renderer_module, "ffmpeg_path", lambda: "ffmpeg")
+    project = Project(
+        videos=[MediaItem("v.mp4", 10.0)],
+        audios=[MediaItem("a.wav", 10.0)],
+    )
+    plan = TimelineEngine().build(project)
+    path = save_timeline(str(tmp_path / "Timeline_Auto.json"), plan)
+
+    renderer = FFmpegRenderer(project, path)
+    assert renderer.timeline.to_dict() == plan.to_dict()
