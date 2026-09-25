@@ -37,6 +37,7 @@ from .key_pool import GeminiKeyPool, MAX_KEYS
 from .media import MediaProbeError, probe_duration
 from .paths import output_dir
 from .project import MediaItem, Project
+from .project_io import load_project, save_project
 from .renderer import FFmpegRenderer
 from .style import APP_STYLE
 
@@ -232,10 +233,17 @@ class MainWindow(QMainWindow):
         row.addLayout(brand)
         row.addStretch(1)
 
-        self.project_name = QComboBox()
-        self.project_name.addItem("Proyek Album Baru")
-        self.project_name.setMinimumWidth(155)
-        row.addWidget(self.project_name)
+        open_project = QToolButton()
+        open_project.setText("Buka Proyek")
+        open_project.setToolTip("Buka proyek Full Album Maker dari JSON")
+        open_project.clicked.connect(self.load_project_file)
+        row.addWidget(open_project)
+
+        save_project_btn = QToolButton()
+        save_project_btn.setText("Simpan")
+        save_project_btn.setToolTip("Simpan proyek agar bisa dilanjutkan nanti")
+        save_project_btn.clicked.connect(self.save_project_file)
+        row.addWidget(save_project_btn)
 
         open_output = QToolButton()
         open_output.setText("Folder")
@@ -315,12 +323,18 @@ class MainWindow(QMainWindow):
         compact_layout(buttons, (0, 0, 0, 0), 5)
         add = QPushButton("+ Tambah Lagu")
         remove = QPushButton("Hapus")
+        up = QPushButton("Naik")
+        down = QPushButton("Turun")
         sort = QPushButton("Urut A–Z")
         add.clicked.connect(self.add_audio)
         remove.clicked.connect(self.remove_audio)
+        up.clicked.connect(lambda: self.move_audio_selected(-1))
+        down.clicked.connect(lambda: self.move_audio_selected(1))
         sort.clicked.connect(self.sort_audio)
         buttons.addWidget(add)
         buttons.addWidget(remove)
+        buttons.addWidget(up)
+        buttons.addWidget(down)
         buttons.addWidget(sort)
         layout.addLayout(buttons)
         return page
@@ -361,9 +375,6 @@ class MainWindow(QMainWindow):
             ("3840 × 2160 (4K UHD)", (3840, 2160)),
         ]:
             self.resolution.addItem(label, data)
-
-        self.aspect = QComboBox()
-        self.aspect.addItem("16:9 Landscape", "16:9")
 
         self.fps = QComboBox()
         for value in (24, 25, 30, 50, 60):
@@ -423,21 +434,20 @@ class MainWindow(QMainWindow):
         self.min_speed.valueChanged.connect(self.apply_settings)
 
         self._grid_field(grid, 0, 0, "Resolusi", self.resolution)
-        self._grid_field(grid, 0, 1, "Aspect Ratio", self.aspect)
-        self._grid_field(grid, 1, 0, "Frame Rate", self.fps)
-        self._grid_field(grid, 1, 1, "Bitrate", self.video_bitrate)
+        self._grid_field(grid, 0, 1, "Frame Rate", self.fps)
+        self._grid_field(grid, 1, 0, "Bitrate Video", self.video_bitrate)
+        self._grid_field(grid, 1, 1, "Bitrate Audio AAC", self.audio_bitrate)
         self._grid_field(grid, 2, 0, "Video Codec", self.codec)
-        self._grid_field(grid, 2, 1, "Audio Codec", self.audio_bitrate)
-        self._grid_field(grid, 3, 0, "Speed Manual", self.manual_speed)
-        self._grid_field(grid, 3, 1, "Batas Slowmo", self.min_speed)
-        self._grid_field(grid, 4, 0, "Jika Footage Kurang", self.loop_mode)
+        self._grid_field(grid, 2, 1, "Speed Manual", self.manual_speed)
+        self._grid_field(grid, 3, 0, "Batas Slowmo", self.min_speed)
+        self._grid_field(grid, 3, 1, "Jika Footage Kurang", self.loop_mode)
 
         auto_wrap = QWidget()
         auto_layout = QVBoxLayout(auto_wrap)
         compact_layout(auto_layout, (0, 0, 0, 0), 2)
         auto_layout.addWidget(self.auto_match)
-        auto_layout.addWidget(muted_label("Audio tidak ikut diperlambat."))
-        grid.addWidget(auto_wrap, 4, 1)
+        auto_layout.addWidget(muted_label("Audio tetap normal; hanya footage yang diperlambat."))
+        grid.addWidget(auto_wrap, 4, 0, 1, 2)
 
         card_layout.addLayout(grid)
         lay.addWidget(settings_card)
@@ -485,6 +495,15 @@ class MainWindow(QMainWindow):
         ready_text.addWidget(self.ready_summary)
         ready_row.addLayout(ready_text, 1)
 
+        validate_btn = QPushButton("Cek Proyek")
+        validate_btn.clicked.connect(self.show_validation)
+        ready_row.addWidget(validate_btn)
+
+        optimize_btn = QPushButton("Optimalkan")
+        optimize_btn.setToolTip("Terapkan setting aman YouTube dari preset yang dipilih")
+        optimize_btn.clicked.connect(self.optimize_current_preset)
+        ready_row.addWidget(optimize_btn)
+
         open_folder = QPushButton("Buka Output")
         open_folder.clicked.connect(self.open_output_folder)
         ready_row.addWidget(open_folder)
@@ -528,43 +547,7 @@ class MainWindow(QMainWindow):
         lay.addLayout(top)
         lay.addWidget(muted_label("Gunakan bahasa alami untuk mengatur slowmo, loop, resolusi, FPS, codec, dan urutan lagu."))
 
-        self.agent_tabs = QTabWidget()
-        self.agent_tabs.setDocumentMode(True)
-        self.agent_tabs.addTab(self._agent_chat_tab(), "Chat")
-        self.agent_tabs.addTab(
-            self._agent_actions_tab(
-                "Ide Video",
-                [
-                    ("Konsep album", "Analisis proyek ini dan berikan konsep visual full album yang konsisten."),
-                    ("Pilih footage", "Analisis durasi proyek dan sarankan penggunaan footage terbaik untuk album ini."),
-                    ("Ritme visual", "Sarankan ritme visual dan strategi slowmo yang nyaman untuk album ini."),
-                ],
-            ),
-            "Ide Video",
-        )
-        self.agent_tabs.addTab(
-            self._agent_actions_tab(
-                "Gaya",
-                [
-                    ("Sinematik", "Atur proyek ini untuk tampilan sinematik 16:9 yang halus dan jelaskan setelannya."),
-                    ("Minimalis", "Sarankan setelan proyek full album dengan gaya visual minimalis dan tidak berlebihan."),
-                    ("YouTube 4K", "Atur proyek ke 4K 30 fps H.264 dengan kualitas tinggi dan strategi durasi yang aman."),
-                ],
-            ),
-            "Gaya",
-        )
-        self.agent_tabs.addTab(
-            self._agent_actions_tab(
-                "Otomasi",
-                [
-                    ("Auto durasi", "Aktifkan pencocokan durasi otomatis minimal 0,5x dan gunakan loop jika kurang."),
-                    ("Standar YouTube", "Atur proyek ke 1080p 30 fps H.264 dan auto loop."),
-                    ("Urutkan lagu", "Urutkan semua lagu berdasarkan nama file lalu jelaskan hasilnya."),
-                ],
-            ),
-            "Otomasi",
-        )
-        lay.addWidget(self.agent_tabs, 1)
+        lay.addWidget(self._agent_chat_tab(), 1)
         return panel
 
     def _agent_chat_tab(self) -> QWidget:
@@ -583,9 +566,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(welcome)
 
         for label, prompt in [
-            ("Analisis album dan sarankan setelan", "Analisis proyek ini dan sarankan setelan terbaik berdasarkan durasi footage dan album."),
-            ("Cocokkan footage dengan durasi lagu", "Aktifkan pencocokan durasi otomatis minimal 0,5x dan gunakan loop bila footage masih kurang."),
-            ("Buat setelan YouTube 1080p", "Atur proyek ke 1080p 30 fps H.264 dengan kualitas yang cocok untuk YouTube."),
+            ("Cek kesiapan proyek", "Validasi proyek ini. Jelaskan error yang harus diperbaiki dan warning yang penting."),
+            ("Optimalkan YouTube 1080p", "Optimalkan proyek ini untuk YouTube 1080p dengan strategi durasi yang aman."),
+            ("Optimalkan YouTube 4K", "Optimalkan proyek ini untuk YouTube 4k dengan strategi durasi yang aman."),
+            ("Rapikan urutan lagu A–Z", "Urutkan semua lagu berdasarkan nama file lalu tampilkan urutan akhirnya."),
         ]:
             btn = QPushButton(label + "  ›")
             btn.setObjectName("quickAction")
@@ -601,9 +585,17 @@ class MainWindow(QMainWindow):
         compact_layout(model_row, (0, 0, 0, 0), 5)
         model_label = QLabel("Model")
         model_label.setObjectName("muted")
-        self.model = QLineEdit("gemini-3.8-flash")
+        self.model = QComboBox()
+        self.model.addItem("Gemini 3.8 Flash", "gemini-3.8-flash")
+        self.model.addItem("Gemini 3.7 Flash", "gemini-3.7-flash")
+        self.model.addItem("Gemini 3.6 Flash", "gemini-3.6-flash")
         model_row.addWidget(model_label)
         model_row.addWidget(self.model, 1)
+
+        reset_chat = QPushButton("Reset")
+        reset_chat.setToolTip("Hapus riwayat percakapan Gemini pada sesi ini")
+        reset_chat.clicked.connect(self.reset_agent_chat)
+        model_row.addWidget(reset_chat)
         layout.addLayout(model_row)
 
         self.prompt = QPlainTextEdit()
@@ -615,24 +607,6 @@ class MainWindow(QMainWindow):
         self.agent_send_btn.setObjectName("primaryButton")
         self.agent_send_btn.clicked.connect(self.ask_agent)
         layout.addWidget(self.agent_send_btn)
-        return page
-
-    def _agent_actions_tab(self, title: str, actions: list[tuple[str, str]]) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        compact_layout(layout, (9, 9, 9, 9), 7)
-
-        heading = QLabel(title)
-        heading.setObjectName("panelTitle")
-        layout.addWidget(heading)
-        layout.addWidget(muted_label("Klik aksi untuk mengirim instruksi yang sesuai ke Gemini Agent."))
-
-        for label, prompt in actions:
-            btn = QPushButton(label + "  ›")
-            btn.setObjectName("quickAction")
-            btn.clicked.connect(lambda _=False, p=prompt: self.quick_prompt(p))
-            layout.addWidget(btn)
-        layout.addStretch(1)
         return page
 
     def apply_preset(self, *_):
@@ -785,7 +759,6 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def quick_prompt(self, text: str):
-        self.agent_tabs.setCurrentIndex(0)
         self.prompt.setPlainText(text)
         self.ask_agent()
 
@@ -799,7 +772,7 @@ class MainWindow(QMainWindow):
         self.agent_send_btn.setText("Gemini sedang bekerja…")
         self.prompt.clear()
         self.chat.appendPlainText(f"ANDA\n{text}\n")
-        model = self.model.text().strip() or "gemini-3.8-flash"
+        model = self.model.currentData() or "gemini-3.8-flash"
 
         def work():
             try:
