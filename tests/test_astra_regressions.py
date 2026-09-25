@@ -12,7 +12,7 @@ import full_album_maker.renderer as renderer_module
 import full_album_maker.ui as ui_module
 from full_album_maker.controller import ProjectController
 from full_album_maker.media import probe_duration
-from full_album_maker.paths import ffmpeg_path
+from full_album_maker.paths import ffmpeg_path, ffprobe_path
 from full_album_maker.project import MediaItem, Project
 from full_album_maker.renderer import FFmpegRenderer, RenderError
 from full_album_maker.timeline import TimelineEngine
@@ -205,8 +205,9 @@ def test_video_probe_ignores_longer_embedded_audio(tmp_path):
 
 def test_slowmo_render_video_stays_aligned_with_audio(tmp_path):
     ffmpeg = ffmpeg_path()
-    if not ffmpeg or "libx264" not in _encoder_output(ffmpeg):
-        pytest.skip("FFmpeg GPL dengan libx264 belum tersedia.")
+    ffprobe = ffprobe_path()
+    if not ffmpeg or not ffprobe or "libx264" not in _encoder_output(ffmpeg):
+        pytest.skip("FFmpeg/FFprobe GPL dengan libx264 belum tersedia.")
 
     video = tmp_path / "source.avi"
     audio = tmp_path / "master.wav"
@@ -244,7 +245,7 @@ def test_slowmo_render_video_stays_aligned_with_audio(tmp_path):
 
     probe = subprocess.run(
         [
-            ffmpeg, "-v", "error", "-show_entries", "stream=codec_type,duration",
+            ffprobe, "-v", "error", "-show_entries", "stream=codec_type,duration",
             "-of", "json", str(output),
         ],
         check=True,
