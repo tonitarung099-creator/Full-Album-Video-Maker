@@ -878,6 +878,12 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "Buka Proyek", "", "Full Album Project (*.json)")
         if not path:
             return
+        previous_project = self.project
+        previous_controller = self.controller
+        previous_agent = self.agent
+        previous_plan = self.timeline_plan
+        previous_ready = self.timeline_ready
+        previous_timeline_path = self.timeline_file_path
         try:
             candidate = load_project(path)
             # Exercise all state used by the UI before replacing the active
@@ -891,6 +897,17 @@ class MainWindow(QMainWindow):
             self.invalidate_timeline()
             self.refresh()
         except Exception as exc:
+            self.project = previous_project
+            self.controller = previous_controller
+            self.agent = previous_agent
+            self.timeline_plan = previous_plan
+            self.timeline_ready = previous_ready
+            self.timeline_file_path = previous_timeline_path
+            self.timeline_preview.set_timeline(previous_plan)
+            try:
+                self.refresh()
+            except Exception:
+                pass
             self._error(f"Gagal membuka proyek: {exc}")
 
     def open_keys(self):
