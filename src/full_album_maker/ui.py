@@ -324,7 +324,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Full Album Maker")
         self.resize(1600, 900)
-        self.setMinimumSize(1180, 720)
+        self.setMinimumSize(1180, 780)
         self.setWindowIcon(brand_icon())
 
         self.project = Project()
@@ -518,7 +518,7 @@ class MainWindow(QMainWindow):
 
         self.auto_timeline_btn = QPushButton("⚡  AUTO SUSUN TIMELINE\nAnalisis footage + album dan buat timeline otomatis")
         self.auto_timeline_btn.setObjectName("autoTimelineButton")
-        self.auto_timeline_btn.setMinimumHeight(68)
+        self.auto_timeline_btn.setFixedHeight(68)
         self.auto_timeline_btn.clicked.connect(self.preview_auto_timeline_step1)
         lay.addWidget(self.auto_timeline_btn)
 
