@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from copy import deepcopy
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
@@ -358,7 +359,7 @@ class MainWindow(QMainWindow):
         compact_layout(model_row, (0, 0, 0, 0), 6)
         model_label = QLabel("Model")
         model_label.setObjectName("subtitle")
-        self.model = QLineEdit("gemini-3.6-flash")
+        self.model = QLineEdit("gemini-3.8-flash")
         self.model.setToolTip("Nama model Gemini yang dipakai agent.")
         model_row.addWidget(model_label)
         model_row.addWidget(self.model, 1)
@@ -508,7 +509,7 @@ class MainWindow(QMainWindow):
 
         self.prompt.clear()
         self.chat.appendPlainText(f"ANDA\n{text}\n")
-        model = self.model.text().strip() or "gemini-3.6-flash"
+        model = self.model.text().strip() or "gemini-3.8-flash"
 
         def work():
             try:
@@ -536,9 +537,11 @@ class MainWindow(QMainWindow):
         self.render_btn.setText("RENDERING…")
         self.log.clear()
 
+        project_snapshot = deepcopy(self.project)
+
         def work():
             try:
-                renderer = FFmpegRenderer(self.project)
+                renderer = FFmpegRenderer(project_snapshot)
                 result = renderer.render(path, log=self.bridge.render_log.emit)
                 self.bridge.render_done.emit(result)
             except Exception as exc:
