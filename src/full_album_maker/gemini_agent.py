@@ -1,55 +1,73 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 from urllib.parse import quote
 
-from .controller import ProjectController
+from .agent_actions import AgentAction, AgentDecision
 from .key_pool import GeminiKeyPool
 
 
-SYSTEM = """Kamu adalah Gemini Agent di aplikasi Full Album Maker.
+SYSTEM = """Kamu adalah Gemini Intent Agent di aplikasi Full Album Maker.
 Bahasa utama: Indonesia.
 
-Tujuanmu adalah membantu pengguna membuat video full album YouTube dari footage video + banyak lagu.
-Kamu BUKAN editor kreatif umum. Jangan mengaku melihat isi visual footage karena tool saat ini hanya memberi nama file, durasi, urutan, dan setting proyek.
+PERANMU HANYA MEMAHAMI BAHASA MANUSIA DAN MENERJEMAHKANNYA MENJADI INTENT APLIKASI.
+Kamu tidak menghitung timeline, tidak menentukan timestamp/frame, tidak menjalankan FFmpeg,
+dan tidak merender video. Semua pekerjaan teknis dilakukan engine lokal aplikasi.
 
-Aturan:
-- Sebelum memberi rekomendasi yang bergantung pada proyek, gunakan project_summary atau validate_project.
-- Utamakan hasil stabil dan sederhana: H.264, 30 fps, audio AAC berkualitas tinggi, auto-speed, minimum slowmo 0.5x, loop otomatis bila footage kurang.
-- Jangan memperlambat di bawah 0.35x kecuali pengguna meminta eksplisit.
-- Audio tidak pernah ikut slow-motion.
-- Jangan mengubah urutan lagu kecuali pengguna meminta.
-- Jika pengguna meminta "optimalkan", gunakan optimize_youtube lalu jelaskan hasilnya.
-- Jika ada error validasi, jelaskan yang harus diperbaiki sebelum render.
-- Jangan mengarang file, nama lagu, durasi, visual, atau hasil render.
-- Setelah tool selesai, ringkas perubahan yang benar-benar diterapkan.
+Pahami bahasa santai, singkatan, typo, dan perintah pendek. Contoh:
+- "susun semua lagu dan video" -> auto_build_timeline
+- "bikin auto" -> auto_build_timeline
+- "pokoknya buat jadi full album" -> auto_build_timeline
+- "slowmo 50 lalu susun" -> set_slowmo speed 0.5, lalu auto_build_timeline
+- "jangan terlalu slow, minimal 0.6" -> set_auto_speed min_speed 0.6
+- "kalau kurang loop aja" -> set_loop_mode loop
+- "jangan loop, maju mundur" -> set_loop_mode pingpong
+- "buat 4k lalu susun" -> optimize_youtube 4k, lalu auto_build_timeline
+- "lagu 3 pindah ke awal" -> move_audio 3 ke 1
+- "hapus video kedua" -> remove_video position 2
+- "urutkan semua lagu" -> sort_audio_by_name
+- "cek sudah siap belum" -> validate_project
+
+Aturan keras:
+1. Jangan pernah menghitung sendiri berapa detik Auto Cut/Loop/slowmo yang dibutuhkan.
+2. Jangan pernah mengarang isi visual footage. Konteks hanya berisi nama, durasi, urutan, dan setting.
+3. Audio adalah master timeline, tetapi keputusan teknis tetap milik engine lokal.
+4. Jangan mengubah urutan lagu/video kecuali pengguna meminta.
+5. Jika pengguna meminta beberapa aksi, keluarkan function call sesuai urutan logis.
+   Setting harus diterapkan SEBELUM auto_build_timeline.
+6. Tidak ada fungsi render. Jangan mengklaim render sudah dimulai/selesai.
+7. Jika maksud pengguna cukup jelas, jangan bertanya ulang.
+8. Jika pengguna hanya bertanya informasi, boleh jawab teks singkat tanpa function call.
+9. Jika ada function call, teks pendamping hanya menyatakan pemahaman/niat, bukan klaim hasil.
+10. "50 persen", "50%", atau "slowmo 50" berarti speed 0.50x bila konteksnya slow motion.
 """
 
 TOOLS = [
     {
-        "name": "project_summary",
-        "description": "Membaca kondisi proyek lengkap: footage, tracklist, durasi, speed, loop, setting, dan validasi.",
+        "name": "auto_build_timeline",
+        "description": "Menyuruh engine lokal aplikasi menyusun semua footage dan semua lagu menjadi TimelinePlan. Gunakan untuk 'susun semuanya', 'bikin auto', 'buat full album', atau 'auto timeline'.",
+        "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "validate_project",
-        "description": "Memeriksa error dan warning proyek sebelum render.",
+        "description": "Menyuruh aplikasi mengecek apakah proyek siap dan menampilkan error/warning.",
+        "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "optimize_youtube",
-        "description": "Menerapkan profil aman untuk full album YouTube: kualitas output, H.264, 30 fps, audio 320k, auto speed min 0.5x, loop otomatis.",
+        "description": "Menerapkan preset YouTube lokal. Tidak membuat timeline kecuali auto_build_timeline juga dipanggil.",
         "parameters": {
             "type": "object",
             "properties": {
-                "quality": {
-                    "type": "string",
-                    "enum": ["1080p", "1440p", "4k"],
-                }
+                "quality": {"type": "string", "enum": ["1080p", "1440p", "4k"]}
             },
+            "required": ["quality"],
         },
     },
     {
         "name": "set_slowmo",
-        "description": "Atur speed footage manual. 0.5 berarti setengah kecepatan.",
+        "description": "Kunci speed footage manual. Contoh 0.5 berarti 50% speed.",
         "parameters": {
             "type": "object",
             "properties": {"speed": {"type": "number"}},
@@ -58,7 +76,7 @@ TOOLS = [
     },
     {
         "name": "set_auto_speed",
-        "description": "Aktifkan pencocokan slow-motion otomatis; min_speed adalah batas slowmo terendah.",
+        "description": "Aktifkan Auto Fit lokal. min_speed adalah batas slowmo terendah.",
         "parameters": {
             "type": "object",
             "properties": {"min_speed": {"type": "number"}},
@@ -66,7 +84,7 @@ TOOLS = [
     },
     {
         "name": "set_loop_mode",
-        "description": "Pilih cara memperpanjang footage bila durasinya kurang.",
+        "description": "Atur cara aplikasi mengisi kekurangan footage.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -80,7 +98,7 @@ TOOLS = [
     },
     {
         "name": "set_resolution",
-        "description": "Atur resolusi output secara manual.",
+        "description": "Atur resolusi output.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -103,7 +121,7 @@ TOOLS = [
     },
     {
         "name": "set_codec",
-        "description": "Atur codec video.",
+        "description": "Atur codec video output.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -114,7 +132,7 @@ TOOLS = [
     },
     {
         "name": "set_quality",
-        "description": "Atur bitrate video dan audio.",
+        "description": "Atur bitrate video/audio secara eksplisit.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -132,10 +150,16 @@ TOOLS = [
     {
         "name": "sort_audio_by_name",
         "description": "Urutkan semua lagu berdasarkan nama file.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "sort_video_by_name",
+        "description": "Urutkan semua footage berdasarkan nama file.",
+        "parameters": {"type": "object", "properties": {}},
     },
     {
         "name": "move_audio",
-        "description": "Pindahkan lagu dari satu posisi ke posisi lain. Posisi dimulai dari 1.",
+        "description": "Pindahkan lagu berdasarkan nomor posisi, dimulai dari 1.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -145,6 +169,36 @@ TOOLS = [
             "required": ["from_position", "to_position"],
         },
     },
+    {
+        "name": "move_video",
+        "description": "Pindahkan footage berdasarkan nomor posisi, dimulai dari 1.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "from_position": {"type": "integer", "minimum": 1},
+                "to_position": {"type": "integer", "minimum": 1},
+            },
+            "required": ["from_position", "to_position"],
+        },
+    },
+    {
+        "name": "remove_audio",
+        "description": "Hapus lagu dari proyek berdasarkan nomor posisi jika pengguna meminta eksplisit.",
+        "parameters": {
+            "type": "object",
+            "properties": {"position": {"type": "integer", "minimum": 1}},
+            "required": ["position"],
+        },
+    },
+    {
+        "name": "remove_video",
+        "description": "Hapus footage dari proyek berdasarkan nomor posisi jika pengguna meminta eksplisit.",
+        "parameters": {
+            "type": "object",
+            "properties": {"position": {"type": "integer", "minimum": 1}},
+            "required": ["position"],
+        },
+    },
 ]
 
 
@@ -152,11 +206,9 @@ class GeminiAgent:
     def __init__(
         self,
         pool: GeminiKeyPool,
-        controller: ProjectController,
         model: str = "gemini-3.8-flash",
     ) -> None:
         self.pool = pool
-        self.controller = controller
         self.model = model
         self.history: list[dict[str, Any]] = []
 
@@ -167,20 +219,31 @@ class GeminiAgent:
     def reset(self) -> None:
         self.history.clear()
 
-    def ask(self, text: str) -> str:
+    def interpret(
+        self,
+        text: str,
+        project_context: dict[str, Any],
+    ) -> AgentDecision:
         history_start = len(self.history)
         self.history.append({"role": "user", "parts": [{"text": text}]})
-        try:
-            return self._run_turn()
-        except Exception:
-            del self.history[history_start:]
-            raise
 
-    def _run_turn(self) -> str:
-        for _ in range(10):
+        try:
+            context_text = json.dumps(
+                project_context,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
             payload = {
-                "systemInstruction": {"parts": [{"text": SYSTEM}]},
-                "contents": self.history,
+                "systemInstruction": {
+                    "parts": [
+                        {
+                            "text": SYSTEM
+                            + "\n\nKONTEKS PROYEK SAAT INI (jangan dihitung ulang):\n"
+                            + context_text
+                        }
+                    ]
+                },
+                "contents": self.history[-16:],
                 "tools": [{"functionDeclarations": TOOLS}],
             }
             response = self.pool.request_json(self._url(), payload)
@@ -192,34 +255,33 @@ class GeminiAgent:
                 "content",
                 {"role": "model", "parts": []},
             )
-            self.history.append(content)
             parts = content.get("parts", [])
-            calls = [p["functionCall"] for p in parts if "functionCall" in p]
 
-            if not calls:
-                texts = [p.get("text", "") for p in parts if p.get("text")]
-                return "\n".join(texts).strip() or "Perubahan selesai."
+            actions: list[AgentAction] = []
+            texts: list[str] = []
 
-            responses = []
-            for call in calls:
-                name = call.get("name", "")
-                args = call.get("args") or {}
-                try:
-                    result = self.controller.execute(name, args)
-                    body = {"ok": True, "result": result}
-                except Exception as exc:
-                    body = {"ok": False, "error": str(exc)}
+            for part in parts:
+                if part.get("text"):
+                    texts.append(str(part["text"]).strip())
+                call = part.get("functionCall")
+                if call:
+                    name = str(call.get("name", "")).strip()
+                    args = call.get("args") or {}
+                    if not isinstance(args, dict):
+                        raise RuntimeError(f"Argumen intent {name} tidak valid.")
+                    actions.append(AgentAction(name=name, args=dict(args)))
 
-                part = {
-                    "functionResponse": {
-                        "name": name,
-                        "response": body,
-                    }
-                }
-                if call.get("id"):
-                    part["functionResponse"]["id"] = call["id"]
-                responses.append(part)
+            message = "\n".join(x for x in texts if x).strip()
+            if actions and not message:
+                message = "Saya memahami perintahnya. Saya teruskan ke engine aplikasi."
+            elif not actions and not message:
+                message = "Saya belum menemukan aksi aplikasi yang perlu dijalankan."
 
-            self.history.append({"role": "user", "parts": responses})
-
-        raise RuntimeError("Gemini mencapai batas langkah tool untuk satu perintah.")
+            # Keep only safe conversational text in history. Raw function calls are not
+            # stored because the app, not Gemini, executes them outside the API tool loop.
+            self.history.append({"role": "model", "parts": [{"text": message}]})
+            self.history = self.history[-16:]
+            return AgentDecision(message=message, actions=actions)
+        except Exception:
+            del self.history[history_start:]
+            raise
