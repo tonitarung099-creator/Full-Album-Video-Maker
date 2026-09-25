@@ -4,11 +4,10 @@ import threading
 from copy import deepcopy
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QObject, QRectF, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -16,7 +15,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QListWidget,
     QMainWindow,
     QMessageBox,
@@ -24,7 +22,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QDoubleSpinBox,
     QSplitter,
-    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -70,6 +67,174 @@ class Bridge(QObject):
     render_done = Signal(str)
 
 
+class TimelinePreview(QWidget):
+    """Visual timeline for Step 1 UI. The real timeline engine is added in Step 2."""
+
+    VIDEO_COLORS = (
+        QColor("#2e7df6"),
+        QColor("#7147ef"),
+        QColor("#159bd7"),
+        QColor("#17b875"),
+        QColor("#b650e7"),
+    )
+    AUDIO_COLORS = (
+        QColor("#8747ef"),
+        QColor("#2e8df7"),
+        QColor("#24a86d"),
+        QColor("#d79d2e"),
+        QColor("#df6a45"),
+        QColor("#d44dac"),
+        QColor("#755be8"),
+        QColor("#3b80e6"),
+    )
+
+    def __init__(self, project: Project, parent=None) -> None:
+        super().__init__(parent)
+        self.project = project
+        self.timeline_ready = False
+        self.setMinimumHeight(260)
+        self.setObjectName("timelinePreview")
+
+    def set_project(self, project: Project) -> None:
+        self.project = project
+        self.update()
+
+    def set_ready(self, ready: bool) -> None:
+        self.timeline_ready = ready
+        self.update()
+
+    def _rect_for_span(self, x0: float, x1: float, y: float, h: float, duration: float, left: float, width: float) -> QRectF:
+        if duration <= 0:
+            return QRectF(left, y, 0, h)
+        start = left + (x0 / duration) * width
+        end = left + (x1 / duration) * width
+        return QRectF(start, y, max(2.0, end - start - 2.0), h)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.fillRect(self.rect(), QColor("#08111d"))
+
+        width = self.width()
+        height = self.height()
+        label_w = 78
+        left = label_w + 12
+        right = 12
+        usable = max(80, width - left - right)
+
+        album = self.project.total_audio_duration
+        video_adjusted = self.project.adjusted_video_duration()
+        duration = max(album, video_adjusted, 1.0)
+
+        ruler_y = 28
+        video_y = 58
+        video_h = max(62, int((height - 112) * 0.48))
+        audio_y = video_y + video_h + 12
+        audio_h = max(54, height - audio_y - 28)
+
+        painter.setPen(QPen(QColor("#66778e"), 1))
+        painter.drawLine(int(left), ruler_y, int(left + usable), ruler_y)
+        for i in range(7):
+            x = left + usable * i / 6
+            painter.drawLine(int(x), ruler_y - 4, int(x), ruler_y + 6)
+            stamp = fmt(duration * i / 6)
+            painter.setPen(QColor("#9ca9b9"))
+            painter.drawText(QRectF(x - 31, 4, 62, 18), Qt.AlignCenter, stamp)
+            painter.setPen(QPen(QColor("#17263a"), 1, Qt.DashLine))
+            painter.drawLine(int(x), ruler_y + 8, int(x), int(audio_y + audio_h))
+
+        painter.setPen(QColor("#56cfff"))
+        painter.drawText(QRectF(8, video_y + 5, label_w - 8, 20), Qt.AlignLeft | Qt.AlignVCenter, "▣ VIDEO")
+        painter.setPen(QColor("#8191a7"))
+        painter.drawText(QRectF(8, video_y + 25, label_w - 8, 18), Qt.AlignLeft | Qt.AlignVCenter, "(footage)")
+        painter.setPen(QColor("#70b8ff"))
+        painter.drawText(QRectF(8, audio_y + 5, label_w - 8, 20), Qt.AlignLeft | Qt.AlignVCenter, "♪ AUDIO")
+        painter.setPen(QColor("#8191a7"))
+        painter.drawText(QRectF(8, audio_y + 25, label_w - 8, 18), Qt.AlignLeft | Qt.AlignVCenter, "(album)")
+
+        if not self.project.videos and not self.project.audios:
+            painter.setPen(QColor("#718198"))
+            painter.drawText(
+                QRectF(left, video_y, usable, video_h + audio_h + 12),
+                Qt.AlignCenter,
+                "Timeline akan muncul setelah footage dan lagu ditambahkan.",
+            )
+            painter.end()
+            return
+
+        speed = max(0.01, self.project.planned_speed())
+        cursor = 0.0
+        for index, item in enumerate(self.project.videos):
+            clip_duration = max(0.0, item.duration / speed)
+            if cursor >= duration:
+                break
+            end = min(duration, cursor + clip_duration)
+            rect = self._rect_for_span(cursor, end, video_y, video_h, duration, left, usable)
+            color = self.VIDEO_COLORS[index % len(self.VIDEO_COLORS)]
+            painter.setPen(QPen(color.lighter(145), 1))
+            painter.setBrush(color)
+            painter.drawRoundedRect(rect, 5, 5)
+            painter.setPen(QColor("#ffffff"))
+            name = Path(item.path).stem
+            label = f"{name[:20]} • {speed:.2f}x"
+            painter.drawText(rect.adjusted(7, 5, -5, -22), Qt.AlignLeft | Qt.AlignTop, label)
+            painter.setPen(QColor("#dce8f7"))
+            painter.drawText(
+                rect.adjusted(7, 24, -5, -4),
+                Qt.AlignLeft | Qt.AlignBottom,
+                f"{fmt(cursor)} – {fmt(end)}",
+            )
+            cursor = end
+
+        if album > 0 and video_adjusted < album:
+            start = max(0.0, video_adjusted)
+            rect = self._rect_for_span(start, album, video_y, video_h, duration, left, usable)
+            painter.setPen(QPen(QColor("#4cf49a"), 1))
+            painter.setBrush(QColor("#10a866"))
+            painter.drawRoundedRect(rect, 5, 5)
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(rect.adjusted(7, 6, -4, -4), Qt.AlignLeft | Qt.AlignTop, "↻ Loop")
+
+        if album > 0 and video_adjusted > album:
+            cut = video_adjusted - album
+            x = left + usable * (album / duration)
+            marker_w = min(116.0, max(72.0, usable * cut / duration))
+            rect = QRectF(max(left, x - marker_w), video_y, marker_w, video_h)
+            painter.setPen(QPen(QColor("#ff6485"), 1))
+            painter.setBrush(QColor("#c9325d"))
+            painter.drawRoundedRect(rect, 5, 5)
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(rect.adjusted(7, 6, -4, -4), Qt.AlignLeft | Qt.AlignTop, f"✂ Auto Cut\n{fmt(cut)}")
+
+        audio_duration = max(album, 1.0)
+        cursor = 0.0
+        for index, item in enumerate(self.project.audios):
+            end = min(album, cursor + max(0.0, item.duration))
+            rect = self._rect_for_span(cursor, end, audio_y, audio_h, audio_duration, left, usable)
+            color = self.AUDIO_COLORS[index % len(self.AUDIO_COLORS)]
+            painter.setPen(QPen(color.lighter(145), 1))
+            painter.setBrush(color)
+            painter.drawRoundedRect(rect, 5, 5)
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(rect.adjusted(5, 4, -4, -18), Qt.AlignLeft | Qt.AlignTop, f"Song {index + 1:02d}")
+            painter.setPen(QColor("#e6efff"))
+            painter.drawText(rect.adjusted(5, 20, -4, -4), Qt.AlignLeft | Qt.AlignBottom, fmt(item.duration))
+            cursor = end
+
+        master = album if album > 0 else duration
+        if self.timeline_ready and master > 0:
+            playhead = left + usable * 0.38
+            painter.setPen(QPen(QColor("#ff466d"), 2))
+            painter.drawLine(int(playhead), ruler_y + 8, int(playhead), int(audio_y + audio_h))
+            painter.setBrush(QColor("#ff466d"))
+            painter.setPen(Qt.NoPen)
+            painter.drawRoundedRect(QRectF(playhead - 24, ruler_y - 22, 48, 18), 5, 5)
+            painter.setPen(QColor("#ffffff"))
+            painter.drawText(QRectF(playhead - 24, ruler_y - 22, 48, 18), Qt.AlignCenter, fmt(master * 0.38))
+
+        painter.end()
+
+
 class KeyDialog(QDialog):
     def __init__(self, pool: GeminiKeyPool, parent=None) -> None:
         super().__init__(parent)
@@ -77,14 +242,12 @@ class KeyDialog(QDialog):
         self.setWindowTitle("Kelola Gemini Key")
         self.resize(650, 455)
         self.setMinimumSize(560, 390)
-
         self.setWindowIcon(brand_icon())
 
         layout = QVBoxLayout(self)
         compact_layout(layout, (12, 12, 12, 12), 8)
 
         head = QHBoxLayout()
-        compact_layout(head, (0, 0, 0, 0), 6)
         title = QLabel("Gemini API / Auth Key")
         title.setObjectName("panelTitle")
         self.status = QLabel()
@@ -105,7 +268,6 @@ class KeyDialog(QDialog):
         layout.addWidget(self.input)
 
         row = QHBoxLayout()
-        compact_layout(row, (0, 0, 0, 0), 6)
         add = QPushButton("+ Tambah")
         remove = QPushButton("Hapus")
         reactivate = QPushButton("Aktifkan Lagi")
@@ -161,9 +323,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Full Album Maker")
-        self.resize(1440, 840)
-        self.setMinimumSize(1120, 690)
-
+        self.resize(1600, 900)
+        self.setMinimumSize(1180, 720)
         self.setWindowIcon(brand_icon())
 
         self.project = Project()
@@ -171,6 +332,7 @@ class MainWindow(QMainWindow):
         self.pool = GeminiKeyPool()
         self.agent = None
         self.agent_busy = False
+        self.timeline_ready = False
 
         self.bridge = Bridge()
         self.bridge.agent_message.connect(self._agent_message)
@@ -184,18 +346,20 @@ class MainWindow(QMainWindow):
         root.setObjectName("root")
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        compact_layout(outer, (9, 9, 9, 9), 8)
+        compact_layout(outer, (7, 7, 7, 7), 7)
 
         outer.addWidget(self._header())
 
         self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.setObjectName("mainSplitter")
         self.splitter.setChildrenCollapsible(False)
         self.splitter.addWidget(self._media_panel())
         self.splitter.addWidget(self._center_panel())
         self.splitter.addWidget(self._agent_panel())
-        self.splitter.setSizes([375, 535, 430])
+        self.splitter.setSizes([365, 785, 380])
         outer.addWidget(self.splitter, 1)
 
+        outer.addWidget(self._bottom_status())
         self.refresh()
 
     def _frame(self, name: str, margins=(9, 9, 9, 9), spacing=7) -> tuple[QFrame, QVBoxLayout]:
@@ -206,446 +370,378 @@ class MainWindow(QMainWindow):
         return frame, layout
 
     def _header(self) -> QFrame:
-        frame, row_wrap = self._frame("headerBar", (12, 8, 12, 8), 0)
+        frame, wrap = self._frame("headerBar", (13, 7, 13, 7), 0)
         row = QHBoxLayout()
-        compact_layout(row, (0, 0, 0, 0), 10)
+        compact_layout(row, (0, 0, 0, 0), 9)
 
-        logo_label = QLabel()
-        logo_label.setFixedSize(58, 58)
-        logo_label.setPixmap(brand_pixmap(54))
-        row.addWidget(logo_label)
+        logo = QLabel()
+        logo.setFixedSize(66, 66)
+        logo.setPixmap(brand_pixmap(62))
+        row.addWidget(logo)
 
         brand = QVBoxLayout()
         compact_layout(brand, (0, 0, 0, 0), 0)
-        title_row = QHBoxLayout()
-        compact_layout(title_row, (0, 0, 0, 0), 4)
-        title_a = QLabel("Full Album")
-        title_a.setObjectName("brandTitle")
-        title_b = QLabel("Maker")
-        title_b.setObjectName("brandAccent")
-        title_row.addWidget(title_a)
-        title_row.addWidget(title_b)
-        title_row.addStretch(1)
-        brand.addLayout(title_row)
-        subtitle = QLabel("TURN YOUR MUSIC INTO VISUAL ALBUMS")
+        title = QLabel("Full Album Maker")
+        title.setObjectName("brandTitle")
+        subtitle = QLabel("Footage + Album Audio + Auto Timeline")
         subtitle.setObjectName("brandSubtitle")
+        brand.addWidget(title)
         brand.addWidget(subtitle)
         row.addLayout(brand)
         row.addStretch(1)
 
-        open_project = QToolButton()
-        open_project.setText("Buka Proyek")
-        open_project.setToolTip("Buka proyek Full Album Maker dari JSON")
-        open_project.clicked.connect(self.load_project_file)
-        row.addWidget(open_project)
+        for text, callback in [
+            ("▣  Open Project", self.load_project_file),
+            ("▣  Save Project", self.save_project_file),
+            ("▣  Output Folder", self.open_output_folder),
+            ("⚿  API Keys", self.open_keys),
+        ]:
+            button = QToolButton()
+            button.setText(text)
+            button.setObjectName("headerButton")
+            button.clicked.connect(callback)
+            row.addWidget(button)
 
-        save_project_btn = QToolButton()
-        save_project_btn.setText("Simpan")
-        save_project_btn.setToolTip("Simpan proyek agar bisa dilanjutkan nanti")
-        save_project_btn.clicked.connect(self.save_project_file)
-        row.addWidget(save_project_btn)
-
-        open_output = QToolButton()
-        open_output.setText("Folder")
-        open_output.setToolTip("Buka folder output")
-        open_output.clicked.connect(self.open_output_folder)
-        row.addWidget(open_output)
-
-        settings = QToolButton()
-        settings.setText("Key")
-        settings.setToolTip("Kelola Gemini API key")
-        settings.clicked.connect(self.open_keys)
-        row.addWidget(settings)
-
-        row_wrap.addLayout(row)
+        wrap.addLayout(row)
         return frame
 
     def _media_panel(self) -> QFrame:
-        panel, lay = self._frame("panel")
-        panel.setMinimumWidth(310)
+        panel, lay = self._frame("panel", (9, 8, 9, 8), 7)
+        panel.setMinimumWidth(285)
 
-        top = QHBoxLayout()
-        compact_layout(top, (0, 0, 0, 0), 6)
-        title = QLabel("Media")
+        title = QLabel("◉  MEDIA")
         title.setObjectName("panelTitle")
-        top.addWidget(title)
-        top.addStretch(1)
-        lay.addLayout(top)
+        lay.addWidget(title)
 
-        self.media_tabs = QTabWidget()
-        self.media_tabs.setDocumentMode(True)
-        self.media_tabs.addTab(self._video_tab(), "Footage  0")
-        self.media_tabs.addTab(self._audio_tab(), "Lagu  0")
-        lay.addWidget(self.media_tabs, 1)
-        return panel
-
-    def _video_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        compact_layout(layout, (8, 8, 8, 8), 6)
-
-        title = QLabel("Footage Video")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-        layout.addWidget(muted_label("Video visual yang akan diperlambat atau di-loop mengikuti durasi album."))
+        video_card, video_lay = self._frame("mediaCard", (8, 8, 8, 8), 6)
+        video_head = QHBoxLayout()
+        video_title_box = QVBoxLayout()
+        compact_layout(video_title_box, (0, 0, 0, 0), 0)
+        video_title = QLabel("▣  Footage Videos")
+        video_title.setObjectName("sectionTitle")
+        video_title_box.addWidget(video_title)
+        video_title_box.addWidget(muted_label("Video yang akan digunakan sebagai visual album"))
+        video_head.addLayout(video_title_box, 1)
+        add_video = QPushButton("+  Add Video")
+        add_video.setObjectName("accentButton")
+        add_video.clicked.connect(self.add_video)
+        video_head.addWidget(add_video)
+        video_lay.addLayout(video_head)
 
         self.video_list = QListWidget()
         self.video_list.setTextElideMode(Qt.ElideMiddle)
-        layout.addWidget(self.video_list, 1)
+        self.video_list.setMinimumHeight(150)
+        video_lay.addWidget(self.video_list, 1)
 
-        buttons = QHBoxLayout()
-        compact_layout(buttons, (0, 0, 0, 0), 5)
-        add = QPushButton("+ Tambah Video")
-        remove = QPushButton("Hapus")
-        add.clicked.connect(self.add_video)
-        remove.clicked.connect(self.remove_video)
-        buttons.addWidget(add)
-        buttons.addWidget(remove)
-        buttons.addStretch(1)
-        layout.addLayout(buttons)
-        return page
+        video_controls = QHBoxLayout()
+        compact_layout(video_controls, (0, 0, 0, 0), 4)
+        up_video = QPushButton("↑  Move Up")
+        down_video = QPushButton("↓  Move Down")
+        sort_video = QPushButton("A↕Z  Sort A–Z")
+        up_video.clicked.connect(lambda: self.move_video_selected(-1))
+        down_video.clicked.connect(lambda: self.move_video_selected(1))
+        sort_video.clicked.connect(self.sort_video)
+        for button in (up_video, down_video, sort_video):
+            video_controls.addWidget(button)
+        video_lay.addLayout(video_controls)
 
-    def _audio_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        compact_layout(layout, (8, 8, 8, 8), 6)
+        self.video_total = QLabel()
+        self.video_total.setObjectName("mediaSummary")
+        video_lay.addWidget(self.video_total)
+        lay.addWidget(video_card, 1)
 
-        title = QLabel("Album Songs")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-        layout.addWidget(muted_label("Urutan lagu di sini menjadi urutan album dan chapter YouTube."))
+        audio_card, audio_lay = self._frame("mediaCard", (8, 8, 8, 8), 6)
+        audio_head = QHBoxLayout()
+        audio_title_box = QVBoxLayout()
+        compact_layout(audio_title_box, (0, 0, 0, 0), 0)
+        audio_title = QLabel("♫  Album Songs")
+        audio_title.setObjectName("sectionTitle")
+        audio_title_box.addWidget(audio_title)
+        audio_title_box.addWidget(muted_label("Daftar lagu dalam album (urutan menjadi timeline)"))
+        audio_head.addLayout(audio_title_box, 1)
+        add_audio = QPushButton("+  Add Songs")
+        add_audio.setObjectName("accentButton")
+        add_audio.clicked.connect(self.add_audio)
+        audio_head.addWidget(add_audio)
+        audio_lay.addLayout(audio_head)
 
         self.audio_list = QListWidget()
         self.audio_list.setTextElideMode(Qt.ElideMiddle)
-        layout.addWidget(self.audio_list, 1)
+        self.audio_list.setMinimumHeight(190)
+        audio_lay.addWidget(self.audio_list, 1)
 
-        buttons = QHBoxLayout()
-        compact_layout(buttons, (0, 0, 0, 0), 5)
-        add = QPushButton("+ Tambah Lagu")
-        remove = QPushButton("Hapus")
-        up = QPushButton("Naik")
-        down = QPushButton("Turun")
-        sort = QPushButton("Urut A–Z")
-        add.clicked.connect(self.add_audio)
-        remove.clicked.connect(self.remove_audio)
-        up.clicked.connect(lambda: self.move_audio_selected(-1))
-        down.clicked.connect(lambda: self.move_audio_selected(1))
-        sort.clicked.connect(self.sort_audio)
-        buttons.addWidget(add)
-        buttons.addWidget(remove)
-        buttons.addWidget(up)
-        buttons.addWidget(down)
-        buttons.addWidget(sort)
-        layout.addLayout(buttons)
-        return page
+        audio_controls = QHBoxLayout()
+        compact_layout(audio_controls, (0, 0, 0, 0), 4)
+        up_audio = QPushButton("↑  Move Up")
+        down_audio = QPushButton("↓  Move Down")
+        sort_audio = QPushButton("A↕Z  Sort A–Z")
+        up_audio.clicked.connect(lambda: self.move_audio_selected(-1))
+        down_audio.clicked.connect(lambda: self.move_audio_selected(1))
+        sort_audio.clicked.connect(self.sort_audio)
+        for button in (up_audio, down_audio, sort_audio):
+            audio_controls.addWidget(button)
+        audio_lay.addLayout(audio_controls)
+
+        self.audio_total = QLabel()
+        self.audio_total.setObjectName("mediaSummary")
+        audio_lay.addWidget(self.audio_total)
+        lay.addWidget(audio_card, 1)
+        return panel
+
+    def _setting_card(self, title: str, widget: QWidget, help_text: str) -> QFrame:
+        card, lay = self._frame("settingCard", (9, 8, 9, 8), 4)
+        heading = QLabel(title)
+        heading.setObjectName("sectionTitle")
+        lay.addWidget(heading)
+        lay.addWidget(widget)
+        lay.addWidget(muted_label(help_text))
+        return card
 
     def _center_panel(self) -> QFrame:
-        panel, lay = self._frame("panel")
-        panel.setMinimumWidth(410)
+        panel, lay = self._frame("panel", (9, 8, 9, 8), 7)
+        panel.setMinimumWidth(515)
 
-        top = QHBoxLayout()
-        compact_layout(top, (0, 0, 0, 0), 7)
-        title = QLabel("Pengaturan Video")
+        header = QHBoxLayout()
+        title_box = QVBoxLayout()
+        compact_layout(title_box, (0, 0, 0, 0), 0)
+        title = QLabel("▣  AUTO TIMELINE")
         title.setObjectName("panelTitle")
-        top.addWidget(title)
-        top.addStretch(1)
+        title_box.addWidget(title)
+        title_box.addWidget(muted_label("Susun timeline otomatis berdasarkan lagu dan footage"))
+        header.addLayout(title_box)
+        header.addStretch(1)
+        self.timeline_status = QLabel("Timeline Belum Disusun")
+        self.timeline_status.setObjectName("timelineStatusPending")
+        header.addWidget(self.timeline_status)
+        lay.addLayout(header)
 
-        preset_label = QLabel("Preset")
-        preset_label.setObjectName("muted")
-        top.addWidget(preset_label)
+        self.auto_timeline_btn = QPushButton("⚡  AUTO SUSUN TIMELINE\nAnalisis footage + album dan buat timeline otomatis")
+        self.auto_timeline_btn.setObjectName("autoTimelineButton")
+        self.auto_timeline_btn.setMinimumHeight(68)
+        self.auto_timeline_btn.clicked.connect(self.preview_auto_timeline_step1)
+        lay.addWidget(self.auto_timeline_btn)
+
+        settings = QGridLayout()
+        settings.setContentsMargins(0, 0, 0, 0)
+        settings.setHorizontalSpacing(7)
+        settings.setVerticalSpacing(0)
+
+        self.slowmo_mode = QComboBox()
+        self.slowmo_mode.addItem("Auto Fit", "auto")
+        self.slowmo_mode.addItem("Kunci Slowmo", "locked")
+        self.slowmo_mode.currentIndexChanged.connect(self.apply_settings)
+
+        self.min_speed = QDoubleSpinBox()
+        self.min_speed.setRange(0.05, 1.0)
+        self.min_speed.setSingleStep(0.05)
+        self.min_speed.setDecimals(2)
+        self.min_speed.setValue(0.50)
+        self.min_speed.setSuffix("x")
+        self.min_speed.valueChanged.connect(self.apply_settings)
+
+        self.loop_mode = QComboBox()
+        self.loop_mode.addItem("Loop", "loop")
+        self.loop_mode.addItem("Ping-Pong", "pingpong")
+        self.loop_mode.addItem("Auto", "auto")
+        self.loop_mode.addItem("Tanpa Loop", "none")
+        self.loop_mode.currentIndexChanged.connect(self.apply_settings)
 
         self.preset = QComboBox()
         self.preset.addItem("YouTube 1080p", ((1920, 1080), 30, "12M", "h264"))
         self.preset.addItem("YouTube 1440p", ((2560, 1440), 30, "20M", "h264"))
         self.preset.addItem("YouTube 4K", ((3840, 2160), 30, "45M", "h264"))
         self.preset.currentIndexChanged.connect(self.apply_preset)
-        top.addWidget(self.preset)
-        lay.addLayout(top)
 
-        settings_card, card_layout = self._frame("card", (10, 10, 10, 10), 7)
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(7)
+        settings.addWidget(self._setting_card("◔  Mode Slowmo", self.slowmo_mode, "Atur kecepatan footage agar pas dengan durasi album."), 0, 0)
+        settings.addWidget(self._setting_card("◉  Minimum Slowmo", self.min_speed, "Kecepatan minimal untuk memperpanjang footage."), 0, 1)
+        settings.addWidget(self._setting_card("↻  Jika Footage Kurang", self.loop_mode, "Ulangi footage saat durasi masih kurang."), 0, 2)
+        settings.addWidget(self._setting_card("▣  Output Preset", self.preset, "Resolusi dan format output YouTube."), 0, 3)
+        for i in range(4):
+            settings.setColumnStretch(i, 1)
+        lay.addLayout(settings)
 
-        self.resolution = QComboBox()
-        for label, data in [
-            ("1920 × 1080 (Full HD)", (1920, 1080)),
-            ("2560 × 1440 (2K)", (2560, 1440)),
-            ("3840 × 2160 (4K UHD)", (3840, 2160)),
-        ]:
-            self.resolution.addItem(label, data)
+        calc_card, calc_lay = self._frame("calcCard", (10, 8, 10, 8), 5)
+        calc_head = QHBoxLayout()
+        calc_title = QLabel("●  Contoh Perhitungan (Auto Cut)")
+        calc_title.setObjectName("sectionTitle")
+        calc_head.addWidget(calc_title)
+        calc_head.addStretch(1)
+        calc_lay.addLayout(calc_head)
 
-        self.fps = QComboBox()
-        for value in (24, 25, 30, 50, 60):
-            self.fps.addItem(f"{value} fps", value)
-        self.fps.setCurrentIndex(self.fps.findData(30))
+        calc_grid = QGridLayout()
+        calc_grid.setContentsMargins(0, 0, 0, 0)
+        calc_grid.setHorizontalSpacing(14)
+        self.calc_album = QLabel("00:00:00")
+        self.calc_album.setObjectName("calcPurple")
+        self.calc_video = QLabel("00:00:00")
+        self.calc_video.setObjectName("calcCyan")
+        self.calc_cut = QLabel("00:00:00")
+        self.calc_cut.setObjectName("calcPink")
+        for col, (caption, value) in enumerate([
+            ("Album (durasi audio)", self.calc_album),
+            ("Footage setelah slowmo", self.calc_video),
+            ("Auto Cut", self.calc_cut),
+        ]):
+            box = QVBoxLayout()
+            compact_layout(box, (0, 0, 0, 0), 1)
+            box.addWidget(muted_label(caption))
+            box.addWidget(value)
+            calc_grid.addLayout(box, 0, col)
+            calc_grid.setColumnStretch(col, 1)
+        calc_lay.addLayout(calc_grid)
+        lay.addWidget(calc_card)
 
-        self.video_bitrate = QComboBox()
-        self.video_bitrate.addItem("Standard 12 Mbps", "12M")
-        self.video_bitrate.addItem("Tinggi 20 Mbps", "20M")
-        self.video_bitrate.addItem("4K 45 Mbps", "45M")
+        self.timeline_preview = TimelinePreview(self.project)
+        lay.addWidget(self.timeline_preview, 1)
 
-        self.codec = QComboBox()
-        self.codec.addItem("H.264 (MP4)", "h264")
-        self.codec.addItem("H.265 / HEVC", "h265")
+        legend = QHBoxLayout()
+        compact_layout(legend, (2, 0, 2, 0), 10)
+        info = QLabel("ⓘ  Penjelasan Timeline:")
+        info.setObjectName("muted")
+        legend.addWidget(info)
+        for text in (
+            "● Audio adalah master timeline",
+            "● Jika footage lebih panjang → Auto Cut",
+            "● Jika footage lebih pendek → Loop / Ping-Pong",
+        ):
+            label = QLabel(text)
+            label.setObjectName("legend")
+            legend.addWidget(label)
+        legend.addStretch(1)
+        lay.addLayout(legend)
 
-        self.audio_bitrate = QComboBox()
-        self.audio_bitrate.addItem("AAC 192 kbps", "192k")
-        self.audio_bitrate.addItem("AAC 256 kbps", "256k")
-        self.audio_bitrate.addItem("AAC 320 kbps", "320k")
-        self.audio_bitrate.setCurrentIndex(self.audio_bitrate.findData("320k"))
-
-        self.auto_match = QCheckBox("Cocokkan durasi otomatis")
-        self.auto_match.setChecked(True)
-
-        self.manual_speed = QDoubleSpinBox()
-        self.manual_speed.setRange(0.05, 2.0)
-        self.manual_speed.setSingleStep(0.05)
-        self.manual_speed.setDecimals(2)
-        self.manual_speed.setValue(1.0)
-        self.manual_speed.setSuffix(" ×")
-
-        self.min_speed = QDoubleSpinBox()
-        self.min_speed.setRange(0.05, 1.0)
-        self.min_speed.setSingleStep(0.05)
-        self.min_speed.setDecimals(2)
-        self.min_speed.setValue(0.5)
-        self.min_speed.setSuffix(" ×")
-
-        self.loop_mode = QComboBox()
-        self.loop_mode.addItem("Auto + Loop", "auto")
-        self.loop_mode.addItem("Loop", "loop")
-        self.loop_mode.addItem("Ping-Pong", "pingpong")
-        self.loop_mode.addItem("Tanpa Loop", "none")
-
-        controls = (
-            self.resolution,
-            self.fps,
-            self.video_bitrate,
-            self.codec,
-            self.audio_bitrate,
-            self.loop_mode,
-        )
-        for control in controls:
-            control.currentIndexChanged.connect(self.apply_settings)
-        self.auto_match.toggled.connect(self.apply_settings)
-        self.manual_speed.valueChanged.connect(self.apply_settings)
-        self.min_speed.valueChanged.connect(self.apply_settings)
-
-        self._grid_field(grid, 0, 0, "Resolusi", self.resolution)
-        self._grid_field(grid, 0, 1, "Frame Rate", self.fps)
-        self._grid_field(grid, 1, 0, "Bitrate Video", self.video_bitrate)
-        self._grid_field(grid, 1, 1, "Bitrate Audio AAC", self.audio_bitrate)
-        self._grid_field(grid, 2, 0, "Video Codec", self.codec)
-        self._grid_field(grid, 2, 1, "Speed Manual", self.manual_speed)
-        self._grid_field(grid, 3, 0, "Batas Slowmo", self.min_speed)
-        self._grid_field(grid, 3, 1, "Jika Footage Kurang", self.loop_mode)
-
-        auto_wrap = QWidget()
-        auto_layout = QVBoxLayout(auto_wrap)
-        compact_layout(auto_layout, (0, 0, 0, 0), 2)
-        auto_layout.addWidget(self.auto_match)
-        auto_layout.addWidget(muted_label("Audio tetap normal; hanya footage yang diperlambat."))
-        grid.addWidget(auto_wrap, 4, 0, 1, 2)
-
-        card_layout.addLayout(grid)
-        lay.addWidget(settings_card)
-
-        log_header = QHBoxLayout()
-        compact_layout(log_header, (0, 2, 0, 0), 6)
-        log_title = QLabel("Render Log")
-        log_title.setObjectName("panelTitle")
-        clear_log = QPushButton("Bersihkan")
-        clear_log.clicked.connect(lambda: self.log.clear())
-        log_header.addWidget(log_title)
-        log_header.addStretch(1)
-        log_header.addWidget(clear_log)
-        lay.addLayout(log_header)
-
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMinimumHeight(125)
-        self.log.setPlaceholderText("Log FFmpeg dan status render akan muncul di sini.")
-        lay.addWidget(self.log, 1)
-
-        chips = QHBoxLayout()
-        compact_layout(chips, (0, 0, 0, 0), 5)
-        self.status_labels: dict[str, QLabel] = {}
-        for key in ("video", "album", "speed", "loop"):
-            label = QLabel()
-            label.setObjectName("statusChip")
-            label.setMinimumHeight(22)
-            label.setAlignment(Qt.AlignCenter)
-            self.status_labels[key] = label
-            chips.addWidget(label, 1)
-        lay.addLayout(chips)
-
-        render_card, render_layout = self._frame("renderCard", (10, 8, 10, 9), 6)
-        ready_row = QHBoxLayout()
-        compact_layout(ready_row, (0, 0, 0, 0), 7)
-
-        ready_text = QVBoxLayout()
-        compact_layout(ready_text, (0, 0, 0, 0), 0)
-        ready_title = QLabel("Siap dirender")
-        ready_title.setObjectName("readyTitle")
-        self.ready_summary = QLabel("Tambahkan footage dan lagu untuk memulai.")
-        self.ready_summary.setObjectName("muted")
-        ready_text.addWidget(ready_title)
-        ready_text.addWidget(self.ready_summary)
-        ready_row.addLayout(ready_text, 1)
-
-        validate_btn = QPushButton("Cek Proyek")
-        validate_btn.clicked.connect(self.show_validation)
-        ready_row.addWidget(validate_btn)
-
-        optimize_btn = QPushButton("Optimalkan")
-        optimize_btn.setToolTip("Terapkan setting aman YouTube dari preset yang dipilih")
-        optimize_btn.clicked.connect(self.optimize_current_preset)
-        ready_row.addWidget(optimize_btn)
-
-        open_folder = QPushButton("Buka Output")
-        open_folder.clicked.connect(self.open_output_folder)
-        ready_row.addWidget(open_folder)
-        render_layout.addLayout(ready_row)
-
+        actions = QHBoxLayout()
+        compact_layout(actions, (0, 0, 0, 0), 7)
+        self.regenerate_btn = QPushButton("↻  Regenerate Auto Timeline")
+        self.regenerate_btn.clicked.connect(self.preview_auto_timeline_step1)
+        self.preview_btn = QPushButton("▶  Preview Plan")
+        self.preview_btn.clicked.connect(self.preview_plan_step1)
         self.render_btn = QPushButton("▶  Render Full Album")
         self.render_btn.setObjectName("renderButton")
-        self.render_btn.setMinimumHeight(40)
+        self.render_btn.setMinimumHeight(42)
         self.render_btn.clicked.connect(self.render)
-        render_layout.addWidget(self.render_btn)
+        actions.addWidget(self.regenerate_btn, 1)
+        actions.addWidget(self.preview_btn, 1)
+        actions.addWidget(self.render_btn, 2)
+        lay.addLayout(actions)
 
-        lay.addWidget(render_card)
+        self.log = QPlainTextEdit()
+        self.log.setVisible(False)
         return panel
-
-    def _grid_field(self, grid: QGridLayout, row: int, column: int, title: str, widget: QWidget) -> None:
-        box = QWidget()
-        lay = QVBoxLayout(box)
-        compact_layout(lay, (0, 0, 0, 0), 3)
-        label = QLabel(title)
-        label.setObjectName("sectionTitle")
-        lay.addWidget(label)
-        lay.addWidget(widget)
-        grid.addWidget(box, row, column)
 
     def _agent_panel(self) -> QFrame:
-        panel, lay = self._frame("panel")
-        panel.setMinimumWidth(330)
+        panel, lay = self._frame("panel", (9, 8, 9, 8), 7)
+        panel.setMinimumWidth(300)
 
-        top = QHBoxLayout()
-        compact_layout(top, (0, 0, 0, 0), 6)
-        title = QLabel("✦  Gemini Agent")
+        header = QHBoxLayout()
+        title = QLabel("✦  GEMINI AGENT")
         title.setObjectName("panelTitle")
-        self.key_status = QLabel()
-        self.key_status.setObjectName("statusChip")
-        keys = QPushButton("API Key")
-        keys.clicked.connect(self.open_keys)
-        top.addWidget(title)
-        top.addStretch(1)
-        top.addWidget(self.key_status)
-        top.addWidget(keys)
-        lay.addLayout(top)
-        lay.addWidget(muted_label("Gunakan bahasa alami untuk mengatur slowmo, loop, resolusi, FPS, codec, dan urutan lagu."))
+        header.addWidget(title)
+        header.addStretch(1)
 
-        lay.addWidget(self._agent_chat_tab(), 1)
-        return panel
-
-    def _agent_chat_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        compact_layout(layout, (8, 8, 8, 8), 7)
-
-        welcome, wlay = self._frame("welcomeCard", (12, 10, 12, 10), 4)
-        welcome_title = QLabel("✦  Halo, saya Gemini Agent")
-        welcome_title.setObjectName("readyTitle")
-        welcome_text = muted_label(
-            "Saya bisa membaca kondisi proyek dan mengubah pengaturan melalui tool internal aplikasi."
-        )
-        wlay.addWidget(welcome_title)
-        wlay.addWidget(welcome_text)
-        layout.addWidget(welcome)
-
-        for label, prompt in [
-            ("Cek kesiapan proyek", "Validasi proyek ini. Jelaskan error yang harus diperbaiki dan warning yang penting."),
-            ("Optimalkan YouTube 1080p", "Optimalkan proyek ini untuk YouTube 1080p dengan strategi durasi yang aman."),
-            ("Optimalkan YouTube 4K", "Optimalkan proyek ini untuk YouTube 4k dengan strategi durasi yang aman."),
-            ("Rapikan urutan lagu A–Z", "Urutkan semua lagu berdasarkan nama file lalu tampilkan urutan akhirnya."),
-        ]:
-            btn = QPushButton(label + "  ›")
-            btn.setObjectName("quickAction")
-            btn.clicked.connect(lambda _=False, p=prompt: self.quick_prompt(p))
-            layout.addWidget(btn)
-
-        self.chat = QPlainTextEdit()
-        self.chat.setReadOnly(True)
-        self.chat.setPlaceholderText("Percakapan Gemini akan tampil di sini.")
-        layout.addWidget(self.chat, 1)
-
-        model_row = QHBoxLayout()
-        compact_layout(model_row, (0, 0, 0, 0), 5)
-        model_label = QLabel("Model")
-        model_label.setObjectName("muted")
         self.model = QComboBox()
         self.model.addItem("Gemini 3.8 Flash", "gemini-3.8-flash")
         self.model.addItem("Gemini 3.7 Flash", "gemini-3.7-flash")
         self.model.addItem("Gemini 3.6 Flash", "gemini-3.6-flash")
-        model_row.addWidget(model_label)
-        model_row.addWidget(self.model, 1)
+        header.addWidget(self.model)
+        lay.addLayout(header)
 
-        reset_chat = QPushButton("Reset")
-        reset_chat.setToolTip("Hapus riwayat percakapan Gemini pada sesi ini")
-        reset_chat.clicked.connect(self.reset_agent_chat)
-        model_row.addWidget(reset_chat)
-        layout.addLayout(model_row)
+        agent_desc = muted_label("Gemini memahami bahasa manusia dan menerjemahkannya menjadi perintah aplikasi. Perhitungan teknis tetap dikerjakan engine lokal.")
+        lay.addWidget(agent_desc)
 
+        self.chat = QPlainTextEdit()
+        self.chat.setReadOnly(True)
+        self.chat.setObjectName("chatArea")
+        self.chat.setPlainText(
+            "✦ GEMINI\n"
+            "Halo! Saya Gemini Agent.\n"
+            "Cukup tulis perintah seperti “susun semua lagu dan video”.\n"
+            "Saya akan menerjemahkan maksud Anda menjadi aksi aplikasi.\n"
+        )
+        lay.addWidget(self.chat, 1)
+
+        quick_title = QLabel("⚡  Aksi Cepat")
+        quick_title.setObjectName("sectionTitle")
+        lay.addWidget(quick_title)
+
+        quick = QGridLayout()
+        quick.setContentsMargins(0, 0, 0, 0)
+        quick.setHorizontalSpacing(5)
+        quick.setVerticalSpacing(5)
+        actions = [
+            ("⌕  Cek kesiapan proyek", "Validasi proyek ini dan jelaskan apakah sudah siap."),
+            ("⚙  Optimalkan YouTube 1080p", "Optimalkan proyek ini untuk YouTube 1080p."),
+            ("◔  Kunci slowmo 0.50x", "Atur slowmo ke 0,50x."),
+            ("↻  Loop jika footage kurang", "Gunakan loop jika footage kurang."),
+        ]
+        for index, (label, prompt) in enumerate(actions):
+            button = QPushButton(label)
+            button.setObjectName("quickAction")
+            button.clicked.connect(lambda _=False, p=prompt: self.quick_prompt(p))
+            quick.addWidget(button, index // 2, index % 2)
+        lay.addLayout(quick)
+
+        prompt_row = QHBoxLayout()
+        compact_layout(prompt_row, (0, 0, 0, 0), 5)
         self.prompt = QPlainTextEdit()
-        self.prompt.setMaximumHeight(72)
+        self.prompt.setMaximumHeight(62)
         self.prompt.setPlaceholderText("Tulis perintah untuk Gemini Agent…")
-        layout.addWidget(self.prompt)
-
-        self.agent_send_btn = QPushButton("Kirim ke Gemini  ➜")
-        self.agent_send_btn.setObjectName("primaryButton")
+        prompt_row.addWidget(self.prompt, 1)
+        self.agent_send_btn = QPushButton("➤")
+        self.agent_send_btn.setObjectName("sendButton")
+        self.agent_send_btn.setFixedWidth(42)
         self.agent_send_btn.clicked.connect(self.ask_agent)
-        layout.addWidget(self.agent_send_btn)
-        return page
+        prompt_row.addWidget(self.agent_send_btn)
+        lay.addLayout(prompt_row)
+
+        footer = QHBoxLayout()
+        self.key_status = QLabel()
+        self.key_status.setObjectName("statusChip")
+        footer.addWidget(self.key_status)
+        footer.addStretch(1)
+        reset = QPushButton("Reset Chat")
+        reset.clicked.connect(self.reset_agent_chat)
+        footer.addWidget(reset)
+        lay.addLayout(footer)
+        return panel
+
+    def _bottom_status(self) -> QFrame:
+        bar, lay = self._frame("bottomBar", (8, 5, 8, 5), 0)
+        row = QHBoxLayout()
+        compact_layout(row, (0, 0, 0, 0), 0)
+        self.bottom_labels: dict[str, QLabel] = {}
+        for key in ("footage", "album", "speed", "loop", "cut", "output"):
+            label = QLabel()
+            label.setObjectName("bottomMetric")
+            label.setAlignment(Qt.AlignCenter)
+            label.setMinimumHeight(34)
+            self.bottom_labels[key] = label
+            row.addWidget(label, 1)
+        lay.addLayout(row)
+        return bar
 
     def apply_preset(self, *_):
         data = self.preset.currentData()
         if not data:
             return
         resolution, fps, bitrate, codec = data
-        controls = [self.resolution, self.fps, self.video_bitrate, self.codec]
-        for control in controls:
-            control.blockSignals(True)
-        try:
-            idx = self.resolution.findData(resolution)
-            if idx >= 0:
-                self.resolution.setCurrentIndex(idx)
-            idx = self.fps.findData(fps)
-            if idx >= 0:
-                self.fps.setCurrentIndex(idx)
-            idx = self.video_bitrate.findData(bitrate)
-            if idx >= 0:
-                self.video_bitrate.setCurrentIndex(idx)
-            idx = self.codec.findData(codec)
-            if idx >= 0:
-                self.codec.setCurrentIndex(idx)
-        finally:
-            for control in controls:
-                control.blockSignals(False)
-        self.apply_settings()
+        s = self.project.settings
+        s.width, s.height = resolution
+        s.fps = fps
+        s.video_bitrate = bitrate
+        s.codec = codec
+        self.timeline_ready = False
+        self.refresh()
 
     def apply_settings(self, *_):
         s = self.project.settings
-        s.auto_speed = bool(self.auto_match.isChecked())
-        s.manual_speed = float(self.manual_speed.value())
+        s.auto_speed = self.slowmo_mode.currentData() == "auto"
+        if self.slowmo_mode.currentData() == "locked":
+            s.auto_speed = False
+            s.manual_speed = float(self.min_speed.value())
         s.min_speed = float(self.min_speed.value())
         s.loop_mode = self.loop_mode.currentData()
-        s.width, s.height = self.resolution.currentData()
-        s.fps = int(self.fps.currentData())
-        s.codec = self.codec.currentData()
-        s.video_bitrate = self.video_bitrate.currentData()
-        s.audio_bitrate = self.audio_bitrate.currentData()
+        self.timeline_ready = False
         self.refresh()
 
     def add_video(self):
@@ -675,23 +771,20 @@ class MainWindow(QMainWindow):
                 self._error(str(exc))
         if skipped:
             self.log.appendPlainText(f"{skipped} file duplikat dilewati.")
+        self.timeline_ready = False
         self.refresh()
 
-    def remove_video(self):
+    def move_video_selected(self, direction: int):
         row = self.video_list.currentRow()
-        if row >= 0:
-            del self.project.videos[row]
-            self.refresh()
-
-    def remove_audio(self):
-        row = self.audio_list.currentRow()
-        if row >= 0:
-            del self.project.audios[row]
-            self.refresh()
-
-    def sort_audio(self):
-        self.project.sort_audio_by_name()
+        if row < 0:
+            return
+        target = row + direction
+        if not 0 <= target < len(self.project.videos):
+            return
+        self.project.videos[row], self.project.videos[target] = self.project.videos[target], self.project.videos[row]
+        self.timeline_ready = False
         self.refresh()
+        self.video_list.setCurrentRow(target)
 
     def move_audio_selected(self, direction: int):
         row = self.audio_list.currentRow()
@@ -700,155 +793,75 @@ class MainWindow(QMainWindow):
         target = row + direction
         if not 0 <= target < len(self.project.audios):
             return
-        self.project.audios[row], self.project.audios[target] = (
-            self.project.audios[target],
-            self.project.audios[row],
-        )
+        self.project.audios[row], self.project.audios[target] = self.project.audios[target], self.project.audios[row]
+        self.timeline_ready = False
         self.refresh()
         self.audio_list.setCurrentRow(target)
 
+    def sort_video(self):
+        self.project.videos.sort(key=lambda x: x.name.casefold())
+        self.timeline_ready = False
+        self.refresh()
+
+    def sort_audio(self):
+        self.project.sort_audio_by_name()
+        self.timeline_ready = False
+        self.refresh()
+
     def save_project_file(self):
         default = str(output_dir() / "Full_Album_Project.json")
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Simpan Proyek",
-            default,
-            "Full Album Project (*.json)",
-        )
+        path, _ = QFileDialog.getSaveFileName(self, "Simpan Proyek", default, "Full Album Project (*.json)")
         if not path:
             return
         try:
-            saved = save_project(path, self.project)
-            self.log.appendPlainText(f"Proyek disimpan: {saved}")
+            save_project(path, self.project)
         except Exception as exc:
             self._error(f"Gagal menyimpan proyek: {exc}")
 
     def load_project_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Buka Proyek",
-            "",
-            "Full Album Project (*.json)",
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Buka Proyek", "", "Full Album Project (*.json)")
         if not path:
             return
         try:
-            loaded = load_project(path)
-            self.project = loaded
+            self.project = load_project(path)
             self.controller = ProjectController(self.project)
             self.agent = None
-            self.chat.clear()
+            self.timeline_ready = False
+            self.timeline_preview.set_project(self.project)
             self.refresh()
-            report = self.project.validation()
-            self.log.appendPlainText(f"Proyek dibuka: {path}")
-            if report["errors"]:
-                self.log.appendPlainText("Ada file/setting proyek yang perlu diperbaiki.")
         except Exception as exc:
             self._error(f"Gagal membuka proyek: {exc}")
-
-    def optimize_current_preset(self):
-        label = self.preset.currentText().casefold()
-        quality = "4k" if "4k" in label else ("1440p" if "1440" in label else "1080p")
-        result = self.project.optimize_youtube(quality)
-        self.refresh()
-        self.log.appendPlainText(
-            f"Optimasi diterapkan: {quality}, {result['fps']} fps, "
-            f"{result['codec'].upper()}, speed {result['planned_speed']:.3f}×."
-        )
-
-    def show_validation(self):
-        report = self.project.validation()
-        lines = []
-        if report["errors"]:
-            lines.append("ERROR:")
-            lines.extend(f"• {x}" for x in report["errors"])
-        if report["warnings"]:
-            if lines:
-                lines.append("")
-            lines.append("PERINGATAN:")
-            lines.extend(f"• {x}" for x in report["warnings"])
-        if not lines:
-            lines = ["Proyek siap dirender. Tidak ada masalah yang terdeteksi."]
-        QMessageBox.information(self, "Cek Proyek", "\n".join(lines))
-
-    def reset_agent_chat(self):
-        if self.agent is not None:
-            self.agent.reset()
-        self.chat.clear()
-
-    def refresh(self):
-        self.video_list.clear()
-        for item in self.project.videos:
-            self.video_list.addItem(f"▣  {item.name}\n     {fmt(item.duration)}")
-
-        self.audio_list.clear()
-        current = 0.0
-        for index, item in enumerate(self.project.audios, start=1):
-            self.audio_list.addItem(
-                f"{index:02d}   ♪  {item.name}\n       mulai {fmt(current)}  •  durasi {fmt(item.duration)}"
-            )
-            current += item.duration
-
-        self.media_tabs.setTabText(0, f"Footage  {len(self.project.videos)}")
-        self.media_tabs.setTabText(1, f"Lagu  {len(self.project.audios)}")
-
-        p = self.project
-        self.status_labels["video"].setText(f"Footage  {fmt(p.total_video_duration)}")
-        self.status_labels["album"].setText(f"Album  {fmt(p.total_audio_duration)}")
-        self.status_labels["speed"].setText(f"Speed  {p.planned_speed():.3f}×")
-        self.status_labels["loop"].setText(f"Loop  {'YA' if p.needs_loop() else 'TIDAK'}")
-
-        if p.videos and p.audios:
-            self.ready_summary.setText(
-                f"{len(p.audios)} lagu • {len(p.videos)} footage • album {fmt(p.total_audio_duration)} • video hasil {fmt(p.adjusted_video_duration())}"
-            )
-        else:
-            self.ready_summary.setText("Tambahkan footage dan lagu untuk memulai.")
-
-        settings = p.settings
-        controls = [
-            self.auto_match,
-            self.manual_speed,
-            self.min_speed,
-            self.loop_mode,
-            self.resolution,
-            self.fps,
-            self.video_bitrate,
-            self.audio_bitrate,
-            self.codec,
-        ]
-        for control in controls:
-            control.blockSignals(True)
-        try:
-            self.auto_match.setChecked(settings.auto_speed)
-            self.manual_speed.setValue(settings.manual_speed)
-            self.min_speed.setValue(settings.min_speed)
-
-            for widget, value in [
-                (self.loop_mode, settings.loop_mode),
-                (self.resolution, (settings.width, settings.height)),
-                (self.fps, settings.fps),
-                (self.video_bitrate, settings.video_bitrate),
-                (self.audio_bitrate, settings.audio_bitrate),
-                (self.codec, settings.codec),
-            ]:
-                idx = widget.findData(value)
-                if idx >= 0:
-                    widget.setCurrentIndex(idx)
-        finally:
-            for control in controls:
-                control.blockSignals(False)
-
-        summary = self.pool.summary()
-        self.key_status.setText(f"{summary['ready']}/{summary['total']} key")
 
     def open_keys(self):
         KeyDialog(self.pool, self).exec()
         self.refresh()
 
     def open_output_folder(self):
-        folder = output_dir()
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_dir())))
+
+    def preview_auto_timeline_step1(self):
+        if not self.project.videos or not self.project.audios:
+            self.timeline_ready = False
+            self.refresh()
+            QMessageBox.information(
+                self,
+                "Auto Timeline",
+                "Langkah 1 saat ini baru menyelesaikan tampilan. Tambahkan footage dan lagu untuk melihat pratinjau visual. Engine timeline lokal akan dibuat pada Langkah 2.",
+            )
+            return
+        self.timeline_ready = True
+        self.timeline_preview.set_ready(True)
+        self.refresh()
+        self.chat.appendPlainText(
+            "\nAPP\nPratinjau UI Auto Timeline ditampilkan. Engine timeline presisi belum diaktifkan pada Langkah 1.\n"
+        )
+
+    def preview_plan_step1(self):
+        QMessageBox.information(
+            self,
+            "Preview Plan",
+            "Preview Plan adalah bagian tampilan Langkah 1. Data timeline presisi akan mulai dibuat pada Langkah 2.",
+        )
 
     def quick_prompt(self, text: str):
         self.prompt.setPlainText(text)
@@ -861,9 +874,8 @@ class MainWindow(QMainWindow):
 
         self.agent_busy = True
         self.agent_send_btn.setEnabled(False)
-        self.agent_send_btn.setText("Gemini sedang bekerja…")
         self.prompt.clear()
-        self.chat.appendPlainText(f"ANDA\n{text}\n")
+        self.chat.appendPlainText(f"\nANDA\n{text}\n")
         model = self.model.currentData() or "gemini-3.8-flash"
 
         def work():
@@ -881,35 +893,78 @@ class MainWindow(QMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _agent_message(self, text):
-        self.chat.appendPlainText(f"GEMINI\n{text}\n")
+        self.chat.appendPlainText(f"\nGEMINI\n{text}\n")
 
     def _agent_done(self):
         self.agent_busy = False
         self.agent_send_btn.setEnabled(True)
-        self.agent_send_btn.setText("Kirim ke Gemini  ➜")
+
+    def reset_agent_chat(self):
+        if self.agent is not None:
+            self.agent.reset()
+        self.chat.setPlainText(
+            "✦ GEMINI\nHalo! Saya Gemini Agent.\nCukup tulis perintah seperti “susun semua lagu dan video”.\n"
+        )
+
+    def refresh(self):
+        self.video_list.clear()
+        for item in self.project.videos:
+            self.video_list.addItem(f"▣  {item.name}                                      {fmt(item.duration)}")
+
+        self.audio_list.clear()
+        for index, item in enumerate(self.project.audios, start=1):
+            self.audio_list.addItem(f"♪  {index:02d}   {Path(item.path).stem}                              {fmt(item.duration)}")
+
+        p = self.project
+        speed = p.planned_speed()
+        adjusted = p.adjusted_video_duration()
+        album = p.total_audio_duration
+        cut = max(0.0, adjusted - album) if album > 0 else 0.0
+
+        self.video_total.setText(f"▣   Total Durasi Footage        {fmt(p.total_video_duration)}     {len(p.videos)} file")
+        self.audio_total.setText(f"♫   Total Durasi Album          {fmt(album)}     {len(p.audios)} lagu")
+
+        self.calc_album.setText(fmt(album))
+        self.calc_video.setText(fmt(adjusted))
+        self.calc_cut.setText(f"potong {fmt(cut)}" if cut > 0 else "tidak perlu")
+
+        if self.timeline_ready:
+            self.timeline_status.setText("✓  Timeline Siap")
+            self.timeline_status.setObjectName("timelineStatusReady")
+        else:
+            self.timeline_status.setText("Timeline Perlu Diperbarui" if (p.videos or p.audios) else "Timeline Belum Disusun")
+            self.timeline_status.setObjectName("timelineStatusPending")
+        self.timeline_status.style().unpolish(self.timeline_status)
+        self.timeline_status.style().polish(self.timeline_status)
+
+        self.timeline_preview.set_project(self.project)
+        self.timeline_preview.set_ready(self.timeline_ready)
+
+        self.bottom_labels["footage"].setText(f"▣  Footage\n{fmt(p.total_video_duration)}")
+        self.bottom_labels["album"].setText(f"♫  Album\n{fmt(album)}")
+        self.bottom_labels["speed"].setText(f"◔  Planned Speed\n{speed:.2f}x")
+        self.bottom_labels["loop"].setText(f"↻  Needs Loop\n{'Yes' if p.needs_loop() else 'No'}")
+        self.bottom_labels["cut"].setText(f"✂  Auto Cut\n{fmt(cut)}")
+        self.bottom_labels["output"].setText(
+            f"⚙  Output\n{self.preset.currentText()}  •  {p.settings.width}×{p.settings.height}  •  {p.settings.fps} fps"
+        )
+
+        summary = self.pool.summary()
+        self.key_status.setText(f"{summary['ready']}/{summary['total']} key")
 
     def render(self):
         report = self.project.validation()
         if report["errors"]:
             self._error("Proyek belum siap:\n\n" + "\n".join(f"• {x}" for x in report["errors"]))
             return
-        if report["warnings"]:
-            self.log.appendPlainText("Peringatan sebelum render:")
-            for warning in report["warnings"]:
-                self.log.appendPlainText(f"• {warning}")
 
         default_path = str(output_dir() / "FULL_ALBUM_FINAL.mp4")
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Simpan Full Album", default_path, "MP4 (*.mp4)"
-        )
+        path, _ = QFileDialog.getSaveFileName(self, "Simpan Full Album", default_path, "MP4 (*.mp4)")
         if not path:
             return
 
         self.render_btn.setEnabled(False)
         self.render_btn.setText("Rendering…")
-        self.log.clear()
-        self.log.appendPlainText("Menyiapkan proyek render…")
-
         project_snapshot = deepcopy(self.project)
 
         def work():
@@ -930,7 +985,6 @@ class MainWindow(QMainWindow):
         self.render_btn.setEnabled(True)
         self.render_btn.setText("▶  Render Full Album")
         if path:
-            self.log.appendPlainText("Render selesai.")
             QMessageBox.information(self, "Render selesai", f"Video selesai:\n{path}")
 
     def _error(self, text):
@@ -942,7 +996,6 @@ def run() -> int:
     app.setApplicationName("Full Album Maker")
     app.setStyle("Fusion")
     app.setStyleSheet(APP_STYLE)
-
     app.setWindowIcon(brand_icon())
 
     win = MainWindow()
