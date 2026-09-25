@@ -248,3 +248,31 @@ def test_ui_rejects_stale_gemini_intent(monkeypatch, tmp_path):
     assert window.timeline_plan is None
     assert "tidak diterapkan" in window.chat.toPlainText()
     window.close()
+
+
+def test_render_is_blocked_until_timeline_is_ready(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    app.setStyleSheet(APP_STYLE)
+
+    video = tmp_path / "video.mp4"
+    audio = tmp_path / "song.wav"
+    video.touch()
+    audio.touch()
+
+    window = MainWindow()
+    project = Project(
+        videos=[MediaItem(str(video), 10.0)],
+        audios=[MediaItem(str(audio), 10.0)],
+    )
+    window.project = project
+    window.controller = ProjectController(project)
+    window.refresh()
+
+    messages = []
+    window._error = messages.append
+    window.render()
+
+    assert messages
+    assert "AUTO SUSUN TIMELINE" in messages[0]
+    assert window.timeline_plan is None
+    window.close()
