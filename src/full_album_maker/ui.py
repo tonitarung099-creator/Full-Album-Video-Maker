@@ -352,6 +352,7 @@ class MainWindow(QMainWindow):
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setObjectName("mainSplitter")
+        self.splitter.setHandleWidth(7)
         self.splitter.setChildrenCollapsible(False)
         self.splitter.addWidget(self._media_panel())
         self.splitter.addWidget(self._center_panel())
