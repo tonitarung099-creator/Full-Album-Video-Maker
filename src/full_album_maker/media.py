@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import subprocess
+from fractions import Fraction
 from pathlib import Path
 
 from .paths import ffmpeg_path, ffprobe_path
@@ -38,7 +39,7 @@ def _probe_stream_duration(path: Path, selector: str | None) -> float:
         cmd += ["-select_streams", selector]
     cmd += [
         "-show_entries",
-        "stream=duration:stream_tags=DURATION:format=duration",
+        "stream=duration,duration_ts,time_base:stream_tags=DURATION:format=duration",
         "-of",
         "json",
         str(path),
@@ -62,6 +63,14 @@ def _probe_stream_duration(path: Path, selector: str | None) -> float:
             tagged = _parse_ffmpeg_time((stream.get("tags") or {}).get("DURATION", ""))
             if tagged is not None:
                 return tagged
+            try:
+                ticks = int(stream.get("duration_ts"))
+                time_base = Fraction(str(stream.get("time_base")))
+                derived = float(ticks * time_base)
+            except (TypeError, ValueError, ZeroDivisionError):
+                derived = 0.0
+            if math.isfinite(derived) and derived > 0:
+                return derived
         value = _positive_float((payload.get("format") or {}).get("duration"))
         if value is not None:
             return value
