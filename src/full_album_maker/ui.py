@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .agent_actions import AppIntentExecutor
 from .branding import brand_icon, brand_pixmap
 from .controller import ProjectController
 from .gemini_agent import GeminiAgent
@@ -41,6 +42,7 @@ from .timeline import (
     TimelineEngine,
     TimelineError,
     TimelinePlan,
+    project_signature,
     save_timeline,
     timeline_matches_project,
 )
@@ -66,7 +68,7 @@ def muted_label(text: str) -> QLabel:
 
 
 class Bridge(QObject):
-    agent_message = Signal(str)
+    agent_decision = Signal(object, str)
     agent_done = Signal()
     render_log = Signal(str)
     error = Signal(str)
@@ -383,7 +385,7 @@ class MainWindow(QMainWindow):
         self.timeline_file_path = ""
 
         self.bridge = Bridge()
-        self.bridge.agent_message.connect(self._agent_message)
+        self.bridge.agent_decision.connect(self._handle_agent_decision)
         self.bridge.agent_done.connect(self._agent_done)
         self.bridge.render_log.connect(self._render_log)
         self.bridge.error.connect(self._error)
@@ -718,10 +720,10 @@ class MainWindow(QMainWindow):
         quick.setHorizontalSpacing(5)
         quick.setVerticalSpacing(5)
         actions = [
-            ("⌕  Cek kesiapan proyek", "Validasi proyek ini dan jelaskan apakah sudah siap."),
-            ("⚙  Optimalkan YouTube 1080p", "Optimalkan proyek ini untuk YouTube 1080p."),
-            ("◔  Kunci slowmo 0.50x", "Atur slowmo ke 0,50x."),
-            ("↻  Loop jika footage kurang", "Gunakan loop jika footage kurang."),
+            ("⚡  Susun semua lagu + video", "susun semua lagu dan video"),
+            ("⌕  Cek kesiapan proyek", "cek apakah proyek ini sudah siap"),
+            ("◔  Slowmo 50% lalu susun", "buat slowmo 50 persen lalu susun semuanya"),
+            ("▣  YouTube 1080p + susun", "buat untuk YouTube 1080p lalu susun semuanya"),
         ]
         for index, (label, prompt) in enumerate(actions):
             button = QPushButton(label)
@@ -994,23 +996,67 @@ class MainWindow(QMainWindow):
         self.prompt.clear()
         self.chat.appendPlainText(f"\nANDA\n{text}\n")
         model = self.model.currentData() or "gemini-3.8-flash"
+        context = self.controller.summary()
+        context_signature = project_signature(self.project)
 
         def work():
             try:
                 if self.agent is None or self.agent.model != model:
-                    self.agent = GeminiAgent(self.pool, self.controller, model=model)
-                answer = self.agent.ask(text)
-                self.bridge.agent_message.emit(answer)
-                self.bridge.refresh.emit()
+                    self.agent = GeminiAgent(self.pool, model=model)
+                decision = self.agent.interpret(text, context)
+                self.bridge.agent_decision.emit(decision, context_signature)
             except Exception as exc:
                 self.bridge.error.emit(str(exc))
-            finally:
                 self.bridge.agent_done.emit()
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _agent_message(self, text):
-        self.chat.appendPlainText(f"\nGEMINI\n{text}\n")
+    def _handle_agent_decision(self, decision, context_signature: str):
+        try:
+            self.chat.appendPlainText(f"\nGEMINI\n{decision.message}\n")
+
+            if context_signature != project_signature(self.project):
+                self.chat.appendPlainText(
+                    "APP\nPerintah tidak diterapkan karena proyek berubah saat Gemini sedang memahami perintah. "
+                    "Kirim ulang perintah pada kondisi proyek terbaru.\n"
+                )
+                return
+
+            if not decision.actions:
+                return
+
+            project_backup = deepcopy(self.project)
+            try:
+                executor = AppIntentExecutor(
+                    self.project,
+                    timeline_output_path=str(output_dir() / "Timeline_Auto.json"),
+                )
+                execution = executor.execute(decision.actions)
+            except Exception:
+                self.project = project_backup
+                self.controller = ProjectController(self.project)
+                self.agent = None
+                self.invalidate_timeline()
+                self._sync_controls_from_project()
+                self.refresh()
+                raise
+
+            if execution.project_changed:
+                self.invalidate_timeline()
+
+            if execution.timeline_plan is not None:
+                self.timeline_file_path = execution.timeline_path
+                self.apply_timeline_plan(execution.timeline_plan)
+            else:
+                self._sync_controls_from_project()
+                self.refresh()
+
+            if execution.summary_text:
+                self.chat.appendPlainText(f"APP\n{execution.summary_text}\n")
+        except Exception as exc:
+            self._error(f"Perintah Gemini gagal diterapkan:\n\n{exc}")
+        finally:
+            self._agent_done()
 
     def _agent_done(self):
         self.agent_busy = False
@@ -1023,7 +1069,36 @@ class MainWindow(QMainWindow):
             "✦ GEMINI\nHalo! Saya Gemini Agent.\nCukup tulis perintah seperti “susun semua lagu dan video”.\n"
         )
 
+    def _sync_controls_from_project(self):
+        settings = self.project.settings
+        controls = [self.slowmo_mode, self.min_speed, self.loop_mode, self.preset]
+        for control in controls:
+            control.blockSignals(True)
+        try:
+            slowmo_index = self.slowmo_mode.findData(
+                "auto" if settings.auto_speed else "locked"
+            )
+            if slowmo_index >= 0:
+                self.slowmo_mode.setCurrentIndex(slowmo_index)
+
+            speed_value = settings.min_speed if settings.auto_speed else settings.manual_speed
+            self.min_speed.setValue(float(speed_value))
+
+            loop_index = self.loop_mode.findData(settings.loop_mode)
+            if loop_index >= 0:
+                self.loop_mode.setCurrentIndex(loop_index)
+
+            for index in range(self.preset.count()):
+                data = self.preset.itemData(index)
+                if data and tuple(data[0]) == (settings.width, settings.height):
+                    self.preset.setCurrentIndex(index)
+                    break
+        finally:
+            for control in controls:
+                control.blockSignals(False)
+
     def refresh(self):
+        self._sync_controls_from_project()
         self.video_list.clear()
         for item in self.project.videos:
             self.video_list.addItem(f"▣  {item.name}                                      {fmt(item.duration)}")
