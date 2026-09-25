@@ -239,9 +239,11 @@ class Project:
 
         video_bitrate = settings_data.get("video_bitrate", defaults.video_bitrate)
         audio_bitrate = settings_data.get("audio_bitrate", defaults.audio_bitrate)
-        if not isinstance(video_bitrate, str) or not video_bitrate.strip():
+        allowed_video_bitrates = {"6M", "8M", "12M", "20M", "30M", "45M", "60M"}
+        allowed_audio_bitrates = {"128k", "192k", "256k", "320k"}
+        if video_bitrate not in allowed_video_bitrates:
             raise ValueError("Video bitrate proyek tidak valid.")
-        if not isinstance(audio_bitrate, str) or not audio_bitrate.strip():
+        if audio_bitrate not in allowed_audio_bitrates:
             raise ValueError("Audio bitrate proyek tidak valid.")
 
         settings = ProjectSettings(

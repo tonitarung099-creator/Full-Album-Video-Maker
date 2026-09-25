@@ -56,7 +56,14 @@ def _probe_stream_duration(path: Path, selector: str | None) -> float:
             timeout=30,
         )
         payload = json.loads(proc.stdout or "{}")
-        for stream in payload.get("streams", []):
+        streams = payload.get("streams") or []
+        if selector and not streams:
+            label = "video" if selector.startswith("v") else "audio"
+            raise MediaProbeError(
+                f"File {path.name} tidak memiliki stream {label} yang dapat digunakan."
+            )
+
+        for stream in streams:
             value = _positive_float(stream.get("duration"))
             if value is not None:
                 return value
@@ -74,6 +81,8 @@ def _probe_stream_duration(path: Path, selector: str | None) -> float:
         value = _positive_float((payload.get("format") or {}).get("duration"))
         if value is not None:
             return value
+    except MediaProbeError:
+        raise
     except Exception as exc:
         raise MediaProbeError(f"Gagal membaca durasi {path.name}: {exc}") from exc
 

@@ -788,14 +788,23 @@ class MainWindow(QMainWindow):
 
     def apply_settings(self, *_):
         s = self.project.settings
+        sender = self.sender()
         mode = self.slowmo_mode.currentData()
         value = float(self.min_speed.value())
+
+        # The same spin box displays two different stored values:
+        # min_speed in Auto Fit and manual_speed in Locked mode. Changing only
+        # the mode or loop selector must not copy the currently displayed value
+        # into the other setting.
         if mode == "locked":
             s.auto_speed = False
-            s.manual_speed = value
+            if sender is self.min_speed:
+                s.manual_speed = value
         else:
             s.auto_speed = True
-            s.min_speed = min(1.0, value)
+            if sender is self.min_speed:
+                s.min_speed = min(1.0, value)
+
         s.loop_mode = self.loop_mode.currentData()
         self.invalidate_timeline()
         self.refresh()
