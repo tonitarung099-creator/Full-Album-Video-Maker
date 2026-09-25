@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c536ff"/>
+      <stop offset="0.48" stop-color="#6d55ff"/>
+      <stop offset="1" stop-color="#19d9ff"/>
+    </linearGradient>
+    <linearGradient id="code" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c53cff"/>
+      <stop offset="0.52" stop-color="#4f73ff"/>
+      <stop offset="1" stop-color="#24e3f3"/>
+    </linearGradient>
+    <radialGradient id="disc" cx="55%" cy="52%" r="55%">
+      <stop offset="0" stop-color="#17191e"/>
+      <stop offset="0.68" stop-color="#080a0d"/>
+      <stop offset="1" stop-color="#020304"/>
+    </radialGradient>
+    <linearGradient id="label" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#bd3cff"/>
+      <stop offset="0.5" stop-color="#6c51ff"/>
+      <stop offset="1" stop-color="#10d7ff"/>
+    </linearGradient>
+    <filter id="glow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <circle cx="175" cy="130" r="70" fill="url(#disc)" stroke="#b8c0cc" stroke-width="2"/>
+  <circle cx="175" cy="130" r="58" fill="none" stroke="#202632" stroke-width="1"/>
+  <circle cx="175" cy="130" r="50" fill="none" stroke="#151b24" stroke-width="1"/>
+  <circle cx="175" cy="130" r="42" fill="none" stroke="#232b37" stroke-width="1"/>
+  <circle cx="175" cy="130" r="28" fill="url(#label)"/>
+  <circle cx="175" cy="130" r="6" fill="#05070a"/>
+  <path d="M129 193 C151 186 168 176 188 162" fill="none" stroke="#16c9ff" stroke-opacity=".5" stroke-width="3"/>
+
+  <path d="M32 43 Q32 29 47 27 L148 16 Q162 15 164 31 L164 96
+           C151 104 146 116 146 130 C146 144 151 156 164 164 L164 220
+           Q164 236 149 238 L47 229 Q31 228 31 212 Z"
+        fill="#111620" stroke="url(#edge)" stroke-width="5" filter="url(#glow)"/>
+
+  <path d="M31 55 Q32 39 48 36 L148 25" fill="none" stroke="#b133ff" stroke-width="3" stroke-linecap="round" opacity=".75"/>
+  <path d="M157 28 L157 94" stroke="#20d9ff" stroke-width="4" stroke-linecap="round"/>
+
+  <path d="M82 101 L58 126 L82 151" fill="none" stroke="url(#code)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M119 86 L99 166" fill="none" stroke="url(#code)" stroke-width="14" stroke-linecap="round"/>
+  <path d="M132 101 L156 126 L132 151" fill="none" stroke="url(#code)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
