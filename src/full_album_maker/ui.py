@@ -5,7 +5,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QIcon, QPixmap
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -30,11 +30,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .branding import brand_icon, brand_pixmap
 from .controller import ProjectController
 from .gemini_agent import GeminiAgent
 from .key_pool import GeminiKeyPool, MAX_KEYS
 from .media import MediaProbeError, probe_duration
-from .paths import asset_path, output_dir
+from .paths import output_dir
 from .project import MediaItem, Project
 from .renderer import FFmpegRenderer
 from .style import APP_STYLE
@@ -76,9 +77,7 @@ class KeyDialog(QDialog):
         self.resize(650, 455)
         self.setMinimumSize(560, 390)
 
-        icon = asset_path("logo.png")
-        if icon.exists():
-            self.setWindowIcon(QIcon(str(icon)))
+        self.setWindowIcon(brand_icon())
 
         layout = QVBoxLayout(self)
         compact_layout(layout, (12, 12, 12, 12), 8)
@@ -164,9 +163,7 @@ class MainWindow(QMainWindow):
         self.resize(1440, 840)
         self.setMinimumSize(1120, 690)
 
-        logo = asset_path("logo.png")
-        if logo.exists():
-            self.setWindowIcon(QIcon(str(logo)))
+        self.setWindowIcon(brand_icon())
 
         self.project = Project()
         self.controller = ProjectController(self.project)
@@ -214,12 +211,7 @@ class MainWindow(QMainWindow):
 
         logo_label = QLabel()
         logo_label.setFixedSize(58, 58)
-        logo = asset_path("logo.png")
-        if logo.exists():
-            pix = QPixmap(str(logo))
-            logo_label.setPixmap(
-                pix.scaled(54, 54, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            )
+        logo_label.setPixmap(brand_pixmap(54))
         row.addWidget(logo_label)
 
         brand = QVBoxLayout()
@@ -500,6 +492,7 @@ class MainWindow(QMainWindow):
 
         self.render_btn = QPushButton("▶  Render Full Album")
         self.render_btn.setObjectName("renderButton")
+        self.render_btn.setMinimumHeight(40)
         self.render_btn.clicked.connect(self.render)
         render_layout.addWidget(self.render_btn)
 
@@ -883,9 +876,7 @@ def run() -> int:
     app.setStyle("Fusion")
     app.setStyleSheet(APP_STYLE)
 
-    logo = asset_path("logo.png")
-    if logo.exists():
-        app.setWindowIcon(QIcon(str(logo)))
+    app.setWindowIcon(brand_icon())
 
     win = MainWindow()
     win.show()
