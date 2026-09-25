@@ -324,7 +324,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Full Album Maker")
         self.resize(1600, 900)
-        self.setMinimumSize(1180, 780)
+        self.setMinimumSize(1180, 820)
         self.setWindowIcon(brand_icon())
 
         self.project = Project()
