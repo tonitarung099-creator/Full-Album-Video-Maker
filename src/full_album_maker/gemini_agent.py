@@ -31,7 +31,7 @@ TOOLS = [
 ]
 
 class GeminiAgent:
-    def __init__(self, pool: GeminiKeyPool, controller: ProjectController, model: str = "gemini-3.6-flash") -> None:
+    def __init__(self, pool: GeminiKeyPool, controller: ProjectController, model: str = "gemini-3.8-flash") -> None:
         self.pool = pool
         self.controller = controller
         self.model = model
@@ -42,7 +42,16 @@ class GeminiAgent:
         return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
     def ask(self, text: str) -> str:
-        self.history.append({"role":"user","parts":[{"text": text}]})
+        user_turn = {"role":"user","parts":[{"text": text}]}
+        self.history.append(user_turn)
+        try:
+            return self._run_turn()
+        except Exception:
+            if self.history and self.history[-1] is user_turn:
+                self.history.pop()
+            raise
+
+    def _run_turn(self) -> str:
         for _ in range(8):
             payload = {
                 "systemInstruction": {"parts":[{"text": SYSTEM}]},
