@@ -303,38 +303,72 @@ def validate_timeline_against_project(
     project: Project,
 ) -> list[str]:
     errors = list(plan.validate())
-    if errors:
-        return errors
 
     if not timeline_matches_project(plan, project):
         errors.append("Timeline tidak cocok dengan proyek atau setting saat ini.")
         return errors
 
     for index, clip in enumerate(plan.video_clips):
-        if not 0 <= clip.source_index < len(project.videos):
+        if (
+            not isinstance(clip.source_index, int)
+            or isinstance(clip.source_index, bool)
+            or not 0 <= clip.source_index < len(project.videos)
+        ):
             errors.append(f"Video clip {index + 1} menunjuk source_index yang tidak valid.")
             continue
+
         source = project.videos[clip.source_index]
-        if Path(clip.source) != Path(source.path):
+        if not isinstance(clip.source, str) or Path(clip.source) != Path(source.path):
             errors.append(f"Video clip {index + 1} tidak cocok dengan source proyek.")
-        if clip.source_in < -0.002 or clip.source_out > source.duration + 0.002:
+
+        numeric_range = all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            for value in (clip.source_in, clip.source_out)
+        )
+        if numeric_range and (
+            clip.source_in < -0.002
+            or clip.source_out > source.duration + 0.002
+        ):
             errors.append(f"Video clip {index + 1} melewati batas durasi source.")
+
         if clip.direction not in {"forward", "reverse"}:
             errors.append(f"Video clip {index + 1} memiliki arah yang tidak valid.")
         if clip.kind not in {"source", "loop", "pingpong"}:
             errors.append(f"Video clip {index + 1} memiliki jenis yang tidak valid.")
 
     for index, clip in enumerate(plan.audio_clips):
-        if not 0 <= clip.source_index < len(project.audios):
+        if (
+            not isinstance(clip.source_index, int)
+            or isinstance(clip.source_index, bool)
+            or not 0 <= clip.source_index < len(project.audios)
+        ):
             errors.append(f"Audio clip {index + 1} menunjuk source_index yang tidak valid.")
             continue
+
         source = project.audios[clip.source_index]
-        if Path(clip.source) != Path(source.path):
+        if not isinstance(clip.source, str) or Path(clip.source) != Path(source.path):
             errors.append(f"Audio clip {index + 1} tidak cocok dengan source proyek.")
-        if clip.source_in < -0.002 or clip.source_out > source.duration + 0.002:
-            errors.append(f"Audio clip {index + 1} melewati batas durasi source.")
-        if abs((clip.source_out - clip.source_in) - clip.timeline_duration) > 0.003:
-            errors.append(f"Audio clip {index + 1} memiliki mapping durasi yang tidak konsisten.")
+
+        numeric_values = all(
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            for value in (
+                clip.source_in,
+                clip.source_out,
+                clip.timeline_in,
+                clip.timeline_out,
+            )
+        )
+        if numeric_values:
+            if clip.source_in < -0.002 or clip.source_out > source.duration + 0.002:
+                errors.append(f"Audio clip {index + 1} melewati batas durasi source.")
+            if abs((clip.source_out - clip.source_in) - clip.timeline_duration) > 0.003:
+                errors.append(
+                    f"Audio clip {index + 1} memiliki mapping durasi yang tidak konsisten."
+                )
 
     return errors
 
