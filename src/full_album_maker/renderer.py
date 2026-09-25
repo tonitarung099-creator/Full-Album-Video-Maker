@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -166,15 +167,37 @@ class FFmpegRenderer:
                 f"durasi {plan.duration:.3f} detik."
             )
 
-        root = temp_dir()
-        with tempfile.TemporaryDirectory(prefix="fam_render_", dir=root) as work_dir:
-            work = Path(work_dir)
-            album_audio = work / "timeline_audio.m4a"
-            timeline_video = work / "timeline_video.mp4"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        fd, staged_name = tempfile.mkstemp(
+            prefix=f".{dest_path.stem}.",
+            suffix=f".rendering{dest_path.suffix or '.mp4'}",
+            dir=str(dest_path.parent),
+        )
+        os.close(fd)
+        staged_path = Path(staged_name)
+        staged_path.unlink(missing_ok=True)
 
-            self._build_audio_from_timeline(album_audio, log)
-            self._build_video_from_timeline(timeline_video, work, log)
-            self._build_final(timeline_video, album_audio, destination, log)
+        root = temp_dir()
+        try:
+            with tempfile.TemporaryDirectory(prefix="fam_render_", dir=root) as work_dir:
+                work = Path(work_dir)
+                album_audio = work / "timeline_audio.m4a"
+                timeline_video = work / "timeline_video.mp4"
+
+                self._build_audio_from_timeline(album_audio, log)
+                self._build_video_from_timeline(timeline_video, work, log)
+                self._build_final(
+                    timeline_video,
+                    album_audio,
+                    str(staged_path),
+                    log,
+                )
+
+            # Atomic replacement on the same filesystem: an FFmpeg failure never
+            # destroys a previously successful render at the chosen destination.
+            staged_path.replace(dest_path)
+        finally:
+            staged_path.unlink(missing_ok=True)
 
         self._write_chapters(dest_path.with_name("YouTube_Chapter.txt"))
         self._write_tracklist(dest_path.with_name("Tracklist.txt"))

@@ -1051,33 +1051,51 @@ class MainWindow(QMainWindow):
                 return
 
             project_backup = deepcopy(self.project)
+            previous_plan = self.timeline_plan
+            previous_ready = self.timeline_ready
+            previous_timeline_path = self.timeline_file_path
+            timeline_output = output_dir() / "Timeline_Auto.json"
+            timeline_existed = timeline_output.exists()
+            previous_timeline_bytes = (
+                timeline_output.read_bytes() if timeline_existed else None
+            )
             try:
                 executor = AppIntentExecutor(
                     self.project,
-                    timeline_output_path=str(output_dir() / "Timeline_Auto.json"),
+                    timeline_output_path=str(timeline_output),
                 )
                 execution = executor.execute(decision.actions)
+
+                if execution.project_changed:
+                    self.invalidate_timeline()
+
+                if execution.timeline_plan is not None:
+                    self.timeline_file_path = execution.timeline_path
+                    self.apply_timeline_plan(execution.timeline_plan)
+                else:
+                    self._sync_controls_from_project()
+                    self.refresh()
+
+                if execution.summary_text:
+                    self.chat.appendPlainText(f"APP\n{execution.summary_text}\n")
             except Exception:
                 self.project = project_backup
                 self.controller = ProjectController(self.project)
                 self.agent = None
-                self.invalidate_timeline()
+                self.timeline_plan = previous_plan
+                self.timeline_ready = previous_ready
+                self.timeline_file_path = previous_timeline_path
+                self.timeline_preview.set_timeline(previous_plan)
+                try:
+                    if timeline_existed and previous_timeline_bytes is not None:
+                        timeline_output.write_bytes(previous_timeline_bytes)
+                    else:
+                        timeline_output.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 self._sync_controls_from_project()
                 self.refresh()
                 raise
-
-            if execution.project_changed:
-                self.invalidate_timeline()
-
-            if execution.timeline_plan is not None:
-                self.timeline_file_path = execution.timeline_path
-                self.apply_timeline_plan(execution.timeline_plan)
-            else:
-                self._sync_controls_from_project()
-                self.refresh()
-
-            if execution.summary_text:
-                self.chat.appendPlainText(f"APP\n{execution.summary_text}\n")
         except Exception as exc:
             self._error(f"Perintah Gemini gagal diterapkan:\n\n{exc}")
         finally:
