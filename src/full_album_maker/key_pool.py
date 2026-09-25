@@ -48,6 +48,8 @@ def _dpapi_encrypt(data: bytes) -> bytes:
         return b"DEV0" + data
     crypt32 = ctypes.windll.crypt32
     kernel32 = ctypes.windll.kernel32
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
     in_blob, keep = _blob(data)
     out_blob = _DATA_BLOB()
     ok = crypt32.CryptProtectData(ctypes.byref(in_blob), "FullAlbumMaker", None, None, None, 0, ctypes.byref(out_blob))
