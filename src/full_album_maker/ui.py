@@ -37,7 +37,13 @@ from .project import MediaItem, Project
 from .project_io import load_project, save_project
 from .renderer import FFmpegRenderer
 from .style import APP_STYLE
-from .timeline import TimelinePlan, timeline_matches_project
+from .timeline import (
+    TimelineEngine,
+    TimelineError,
+    TimelinePlan,
+    save_timeline,
+    timeline_matches_project,
+)
 
 
 def fmt(seconds: float) -> str:
@@ -374,6 +380,7 @@ class MainWindow(QMainWindow):
         self.agent_busy = False
         self.timeline_plan: TimelinePlan | None = None
         self.timeline_ready = False
+        self.timeline_file_path = ""
 
         self.bridge = Bridge()
         self.bridge.agent_message.connect(self._agent_message)
@@ -560,7 +567,7 @@ class MainWindow(QMainWindow):
         self.auto_timeline_btn = QPushButton("⚡  AUTO SUSUN TIMELINE\nAnalisis footage + album dan buat timeline otomatis")
         self.auto_timeline_btn.setObjectName("autoTimelineButton")
         self.auto_timeline_btn.setFixedHeight(68)
-        self.auto_timeline_btn.clicked.connect(self.preview_auto_timeline_step1)
+        self.auto_timeline_btn.clicked.connect(self.auto_build_timeline)
         lay.addWidget(self.auto_timeline_btn)
 
         settings = QGridLayout()
@@ -655,7 +662,7 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout()
         compact_layout(actions, (0, 0, 0, 0), 7)
         self.regenerate_btn = QPushButton("↻  Regenerate Auto Timeline")
-        self.regenerate_btn.clicked.connect(self.preview_auto_timeline_step1)
+        self.regenerate_btn.clicked.connect(self.auto_build_timeline)
         self.preview_btn = QPushButton("▶  Preview Plan")
         self.preview_btn.clicked.connect(self.preview_plan_step1)
         self.render_btn = QPushButton("▶  Render Full Album")
@@ -882,32 +889,85 @@ class MainWindow(QMainWindow):
     def open_output_folder(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_dir())))
 
-    def preview_auto_timeline_step1(self):
-        QMessageBox.information(
-            self,
-            "Auto Timeline",
-            "Engine Timeline Lokal sudah tersedia pada Langkah 2. "
-            "Tombol AUTO SUSUN TIMELINE baru akan dihubungkan ke engine pada Langkah 3.",
-        )
+    def auto_build_timeline(self):
+        if not self.project.videos:
+            self._error("Tambahkan minimal satu footage video sebelum Auto Susun Timeline.")
+            return
+        if not self.project.audios:
+            self._error("Tambahkan minimal satu lagu sebelum Auto Susun Timeline.")
+            return
+
+        self.auto_timeline_btn.setEnabled(False)
+        self.regenerate_btn.setEnabled(False)
+        self.auto_timeline_btn.setText("⚙  MENYUSUN TIMELINE…\nEngine lokal sedang menghitung clip, slowmo, cut, dan loop")
+
+        try:
+            plan = TimelineEngine().build(self.project)
+            timeline_path = save_timeline(
+                str(output_dir() / "Timeline_Auto.json"),
+                plan,
+            )
+            self.timeline_file_path = timeline_path
+            self.apply_timeline_plan(plan)
+
+            summary = [
+                "AUTO TIMELINE SELESAI",
+                f"Durasi final: {fmt(plan.duration)}",
+                f"Video clips: {len(plan.video_clips)}",
+                f"Audio clips: {len(plan.audio_clips)}",
+                f"Speed: {plan.planned_speed:.3f}x",
+                f"Auto Cut: {fmt(plan.auto_cut_seconds)}",
+                f"Loop tambahan: {fmt(plan.loop_fill_seconds)}",
+                f"Mode: {plan.loop_mode}",
+                f"JSON: {timeline_path}",
+            ]
+            self.chat.appendPlainText("\nAPP\n" + "\n".join(summary) + "\n")
+        except TimelineError as exc:
+            self.invalidate_timeline()
+            self.refresh()
+            self._error(f"Auto Timeline gagal:\n\n{exc}")
+        except Exception as exc:
+            self.invalidate_timeline()
+            self.refresh()
+            self._error(f"Gagal menyimpan atau membuat Timeline JSON:\n\n{exc}")
+        finally:
+            self.auto_timeline_btn.setEnabled(True)
+            self.regenerate_btn.setEnabled(True)
+            self.auto_timeline_btn.setText(
+                "⚡  AUTO SUSUN TIMELINE\nAnalisis footage + album dan buat timeline otomatis"
+            )
 
     def preview_plan_step1(self):
-        if self.timeline_plan is None:
+        plan = self.timeline_plan
+        if plan is None:
             QMessageBox.information(
                 self,
                 "Preview Plan",
-                "Belum ada TimelinePlan aktif. Pembuatan otomatis dari tombol UI akan diaktifkan pada Langkah 3.",
+                "Belum ada timeline. Klik AUTO SUSUN TIMELINE terlebih dahulu.",
             )
             return
+
+        mode = plan.loop_mode if plan.loop_mode != "none" else "tidak perlu loop"
         QMessageBox.information(
             self,
             "Preview Plan",
-            f"Timeline nyata: {len(self.timeline_plan.video_clips)} clip video, "
-            f"{len(self.timeline_plan.audio_clips)} clip audio, durasi {fmt(self.timeline_plan.duration)}.",
+            "Rencana timeline lokal:\n\n"
+            f"Durasi album: {fmt(plan.duration)}\n"
+            f"Speed footage: {plan.planned_speed:.3f}x\n"
+            f"Clip video: {len(plan.video_clips)}\n"
+            f"Clip audio: {len(plan.audio_clips)}\n"
+            f"Auto Cut: {fmt(plan.auto_cut_seconds)}\n"
+            f"Tambahan loop: {fmt(plan.loop_fill_seconds)}\n"
+            f"Mode: {mode}\n\n"
+            f"Timeline JSON:\n{self.timeline_file_path or 'belum disimpan'}",
         )
 
     def apply_timeline_plan(self, plan: TimelinePlan) -> None:
         if not timeline_matches_project(plan, self.project):
             raise ValueError("TimelinePlan tidak cocok dengan proyek saat ini.")
+        errors = plan.validate()
+        if errors:
+            raise ValueError("TimelinePlan tidak valid: " + " ".join(errors))
         self.timeline_plan = plan
         self.timeline_ready = True
         self.timeline_preview.set_timeline(plan)
@@ -916,6 +976,7 @@ class MainWindow(QMainWindow):
     def invalidate_timeline(self) -> None:
         self.timeline_plan = None
         self.timeline_ready = False
+        self.timeline_file_path = ""
         self.timeline_preview.set_timeline(None)
 
     def quick_prompt(self, text: str):
