@@ -48,10 +48,15 @@ jobs:
         run: |
           python -m pytest -q
 
+      - name: Prepare Windows icon
+        shell: pwsh
+        run: |
+          python -c "from PIL import Image; im=Image.open('assets/logo.png').convert('RGBA'); im.save('assets/logo.ico', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128)])"
+
       - name: Build one-folder EXE
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Full Album Maker" --paths "$PWD\src" "$PWD\src\full_album_maker\main.py"
+          python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Full Album Maker" --icon "$PWD\assets\logo.ico" --paths "$PWD\src" "$PWD\src\full_album_maker\main.py"
 
       - name: Bundle FFmpeg and notices
         shell: pwsh
@@ -61,6 +66,8 @@ jobs:
           Copy-Item "tools\ffmpeg\ffprobe.exe" "dist\Full Album Maker\tools\ffmpeg\ffprobe.exe"
           Copy-Item LICENSE "dist\Full Album Maker\LICENSE.txt"
           Copy-Item THIRD_PARTY_NOTICES.md "dist\Full Album Maker\THIRD_PARTY_NOTICES.md"
+          New-Item -ItemType Directory -Force "dist\Full Album Maker\assets" | Out-Null
+          Copy-Item "assets\logo.png" "dist\Full Album Maker\assets\logo.png"
 
           $ffLicense = Get-ChildItem ffmpeg_unpack -Recurse -File | Where-Object { $_.Name -eq "LICENSE.txt" } | Select-Object -First 1
           $ffReadme = Get-ChildItem ffmpeg_unpack -Recurse -File | Where-Object { $_.Name -eq "README.txt" } | Select-Object -First 1
