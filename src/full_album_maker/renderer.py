@@ -129,6 +129,10 @@ class FFmpegRenderer:
             Path(clip.source).resolve()
             for clip in [*plan.video_clips, *plan.audio_clips]
         }
+        project_source_paths = {
+            Path(item.path).resolve()
+            for item in [*self.project.videos, *self.project.audios]
+        }
         missing = [str(path) for path in source_paths if not path.exists()]
         if missing:
             preview = "\n".join(f"• {x}" for x in missing[:8])
@@ -143,8 +147,16 @@ class FFmpegRenderer:
 
         destination = destination or str(output_dir() / "FULL_ALBUM_FINAL.mp4")
         dest_path = Path(destination).resolve()
-        if dest_path in source_paths:
-            raise RenderError("Lokasi output tidak boleh sama dengan file sumber.")
+        destination_key = str(dest_path).casefold()
+        project_source_keys = {
+            str(path).casefold()
+            for path in project_source_paths
+        }
+        if destination_key in project_source_keys:
+            raise RenderError(
+                "Lokasi output tidak boleh sama dengan file sumber proyek, "
+                "termasuk footage/audio yang tidak terpakai di TimelinePlan."
+            )
 
         if log:
             log(
@@ -318,6 +330,11 @@ class FFmpegRenderer:
             filters.append("reverse")
         filters += [
             f"setpts=(PTS-STARTPTS)/{speed:.10f}",
+            f"fps={settings.fps}",
+            # Hold the final decoded frame briefly before trim. This prevents
+            # per-clip frame rounding/seek shortfalls from accumulating into
+            # visible A/V drift when many clips are concatenated.
+            "tpad=stop_mode=clone:stop_duration=1.0",
             f"trim=duration={timeline_duration:.6f}",
             "setpts=PTS-STARTPTS",
         ]
