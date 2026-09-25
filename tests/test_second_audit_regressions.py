@@ -197,6 +197,8 @@ def test_ui_rolls_back_project_if_plan_application_fails(monkeypatch, tmp_path):
         "full_album_maker.ui.output_dir",
         lambda: tmp_path,
     )
+    timeline_file = tmp_path / "Timeline_Auto.json"
+    timeline_file.write_bytes(b"previous-valid-timeline")
 
     def fail_apply(plan):
         raise RuntimeError("simulated UI apply failure")
@@ -222,4 +224,5 @@ def test_ui_rolls_back_project_if_plan_application_fails(monkeypatch, tmp_path):
     assert window.project.settings.manual_speed == pytest.approx(1.0)
     assert window.timeline_plan is None
     assert window.timeline_ready is False
+    assert timeline_file.read_bytes() == b"previous-valid-timeline"
     window.close()
