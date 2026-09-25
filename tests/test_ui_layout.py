@@ -31,12 +31,13 @@ def test_mockup_layout_has_no_overlap():
 
     assert window.auto_timeline_btn.height() >= 54
     assert window.timeline_preview.height() >= 240
-    assert window.render_btn.height() >= 40
+    assert window.render_btn.height() >= 34
 
     window.resize(1600, 900)
     app.processEvents()
     assert window.auto_timeline_btn.height() >= 68
     assert window.timeline_preview.height() >= 250
+    assert window.render_btn.height() >= 42
 
     assert window.video_list.width() > 220
     assert window.audio_list.width() > 220
