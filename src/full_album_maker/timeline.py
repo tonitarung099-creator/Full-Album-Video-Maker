@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -90,38 +91,147 @@ class TimelinePlan:
 
     def validate(self) -> list[str]:
         errors: list[str] = []
-        if self.duration <= 0:
-            errors.append("Durasi timeline harus lebih dari 0.")
-        if self.planned_speed <= 0:
-            errors.append("Speed timeline harus lebih dari 0.")
+
+        def finite_number(value: Any) -> bool:
+            return (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+            )
+
+        if not finite_number(self.duration) or self.duration <= 0:
+            errors.append("Durasi timeline harus berupa angka finite lebih dari 0.")
+        if not finite_number(self.planned_speed) or self.planned_speed <= 0:
+            errors.append("Speed timeline harus berupa angka finite lebih dari 0.")
+
+        for field_name, value in (
+            ("source_video_duration", self.source_video_duration),
+            ("adjusted_video_duration", self.adjusted_video_duration),
+            ("auto_cut_seconds", self.auto_cut_seconds),
+            ("loop_fill_seconds", self.loop_fill_seconds),
+        ):
+            if not finite_number(value) or value < 0:
+                errors.append(f"{field_name} timeline tidak valid.")
+
+        if self.loop_mode not in {"none", "loop", "pingpong"}:
+            errors.append("Mode loop timeline tidak valid.")
+        if not isinstance(self.project_signature, str) or not self.project_signature:
+            errors.append("Signature proyek timeline tidak valid.")
         if not self.video_clips:
             errors.append("Timeline tidak memiliki clip video.")
         if not self.audio_clips:
             errors.append("Timeline tidak memiliki clip audio.")
 
-        def check_contiguous(clips: list[Any], label: str) -> None:
+        def check_contiguous(clips: list[Any], label: str) -> bool:
             expected = 0.0
+            numeric_track = True
             for index, clip in enumerate(clips):
+                if not isinstance(clip.source, str) or not clip.source:
+                    errors.append(f"{label} clip {index + 1} memiliki source tidak valid.")
+                if not isinstance(clip.name, str):
+                    errors.append(f"{label} clip {index + 1} memiliki nama tidak valid.")
+                if (
+                    not isinstance(clip.source_index, int)
+                    or isinstance(clip.source_index, bool)
+                    or clip.source_index < 0
+                ):
+                    errors.append(
+                        f"{label} clip {index + 1} memiliki source_index tidak valid."
+                    )
+
+                values = (
+                    clip.source_in,
+                    clip.source_out,
+                    clip.timeline_in,
+                    clip.timeline_out,
+                )
+                if not all(finite_number(value) for value in values):
+                    errors.append(
+                        f"{label} clip {index + 1} memiliki angka durasi tidak valid."
+                    )
+                    numeric_track = False
+                    continue
+
                 if clip.timeline_out <= clip.timeline_in:
                     errors.append(f"{label} clip {index + 1} memiliki durasi tidak valid.")
                 if abs(clip.timeline_in - expected) > 0.002:
-                    errors.append(f"{label} clip {index + 1} tidak sambung dengan clip sebelumnya.")
+                    errors.append(
+                        f"{label} clip {index + 1} tidak sambung dengan clip sebelumnya."
+                    )
                 if clip.source_out <= clip.source_in:
-                    errors.append(f"{label} clip {index + 1} memiliki source range tidak valid.")
+                    errors.append(
+                        f"{label} clip {index + 1} memiliki source range tidak valid."
+                    )
+                if clip.source_in < -EPSILON:
+                    errors.append(
+                        f"{label} clip {index + 1} memiliki source_in negatif."
+                    )
                 expected = clip.timeline_out
+            return numeric_track
 
-        check_contiguous(self.video_clips, "Video")
-        check_contiguous(self.audio_clips, "Audio")
+        video_numeric = check_contiguous(self.video_clips, "Video")
+        audio_numeric = check_contiguous(self.audio_clips, "Audio")
 
-        if self.video_clips and abs(self.video_duration - self.duration) > 0.002:
+        if (
+            self.video_clips
+            and video_numeric
+            and finite_number(self.duration)
+            and abs(self.video_duration - self.duration) > 0.002
+        ):
             errors.append("Track video tidak menutup durasi timeline.")
-        if self.audio_clips and abs(self.audio_duration - self.duration) > 0.002:
+        if (
+            self.audio_clips
+            and audio_numeric
+            and finite_number(self.duration)
+            and abs(self.audio_duration - self.duration) > 0.002
+        ):
             errors.append("Track audio tidak menutup durasi timeline.")
 
         for index, clip in enumerate(self.video_clips):
-            expected = clip.source_duration / clip.speed
-            if abs(expected - clip.timeline_duration) > 0.003:
-                errors.append(f"Video clip {index + 1} memiliki mapping speed yang tidak konsisten.")
+            if clip.direction not in {"forward", "reverse"}:
+                errors.append(f"Video clip {index + 1} memiliki arah yang tidak valid.")
+            if clip.kind not in {"source", "loop", "pingpong"}:
+                errors.append(f"Video clip {index + 1} memiliki jenis yang tidak valid.")
+            if (
+                not isinstance(clip.cycle, int)
+                or isinstance(clip.cycle, bool)
+                or clip.cycle < 0
+            ):
+                errors.append(f"Video clip {index + 1} memiliki cycle tidak valid.")
+            if not finite_number(clip.speed) or clip.speed <= 0:
+                errors.append(f"Video clip {index + 1} memiliki speed tidak valid.")
+                continue
+            if not all(
+                finite_number(value)
+                for value in (
+                    clip.source_in,
+                    clip.source_out,
+                    clip.timeline_in,
+                    clip.timeline_out,
+                )
+            ):
+                continue
+            expected_duration = clip.source_duration / clip.speed
+            if abs(expected_duration - clip.timeline_duration) > 0.003:
+                errors.append(
+                    f"Video clip {index + 1} memiliki mapping speed yang tidak konsisten."
+                )
+
+        for index, clip in enumerate(self.audio_clips):
+            if not all(
+                finite_number(value)
+                for value in (
+                    clip.source_in,
+                    clip.source_out,
+                    clip.timeline_in,
+                    clip.timeline_out,
+                )
+            ):
+                continue
+            if abs((clip.source_out - clip.source_in) - clip.timeline_duration) > 0.003:
+                errors.append(
+                    f"Audio clip {index + 1} memiliki mapping durasi yang tidak konsisten."
+                )
 
         return errors
 
@@ -193,6 +303,8 @@ def validate_timeline_against_project(
     project: Project,
 ) -> list[str]:
     errors = list(plan.validate())
+    if errors:
+        return errors
 
     if not timeline_matches_project(plan, project):
         errors.append("Timeline tidak cocok dengan proyek atau setting saat ini.")
