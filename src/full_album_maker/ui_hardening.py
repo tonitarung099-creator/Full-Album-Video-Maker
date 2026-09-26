@@ -65,8 +65,13 @@ def _make_panels_scrollable(window) -> None:
     splitter = getattr(window, "splitter", None)
     if splitter is None:
         return
-    for index in range(splitter.count()):
-        current = splitter.widget(index)
+
+    # Do not use QSplitter.replaceWidget here. On PySide/Windows the returned
+    # widget can lose its C++ ownership before it is re-parented, which deletes
+    # child controls (notably the Gemini model combo). Re-parent the existing
+    # panel into QScrollArea first, then insert the scroll area at the same slot.
+    panels = [splitter.widget(index) for index in range(splitter.count())]
+    for index, current in enumerate(panels):
         if current is None or isinstance(current, QScrollArea):
             continue
         scroll = QScrollArea()
@@ -75,10 +80,9 @@ def _make_panels_scrollable(window) -> None:
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        old = splitter.replaceWidget(index, scroll)
-        if old is not None:
-            scroll.setWidget(old)
-            old.show()
+        scroll.setWidget(current)
+        splitter.insertWidget(index, scroll)
+        current.show()
 
 
 def _configure_preset_combo(window) -> None:
@@ -91,10 +95,8 @@ def _configure_preset_combo(window) -> None:
         preset.currentIndexChanged.disconnect(window.apply_preset)
     except (RuntimeError, TypeError):
         pass
-    try:
-        preset.activated.disconnect(window.apply_preset)
-    except (RuntimeError, TypeError):
-        pass
+    # activated() was not connected by the base UI, so do not call disconnect
+    # on it: recent PySide versions emit a RuntimeWarning for a missing binding.
     preset.activated.connect(window.apply_preset)
 
 
@@ -106,10 +108,11 @@ def _patched_init(self, *args, **kwargs) -> None:
     _append_render_log_ui(self)
     _add_remove_media_buttons(self)
     _configure_preset_combo(self)
-    _make_panels_scrollable(self)
 
     if hasattr(self, "model"):
         self.model.currentIndexChanged.connect(self._invalidate_agent_context)
+
+    _make_panels_scrollable(self)
 
     load_error = getattr(self.pool, "last_load_error", "")
     if load_error:
