@@ -15,6 +15,9 @@ from .atomic_io import atomic_write_bytes
 from .paths import secure_dir
 
 MAX_KEYS = 100
+TRANSIENT_SERVER_RETRIES = 3
+TRANSIENT_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+
 
 @dataclass
 class KeyRecord:
@@ -36,31 +39,50 @@ class KeyRecord:
     def available(self) -> bool:
         return self.enabled and time.time() >= self.cooldown_until
 
+
 class _DATA_BLOB(ctypes.Structure):
-    _fields_ = [("cbData", ctypes.wintypes.DWORD),
-                ("pbData", ctypes.POINTER(ctypes.c_byte))]
+    _fields_ = [
+        ("cbData", ctypes.wintypes.DWORD),
+        ("pbData", ctypes.POINTER(ctypes.c_byte)),
+    ]
+
 
 def _blob(data: bytes):
     buf = ctypes.create_string_buffer(data)
-    return _DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte))), buf
+    return (
+        _DATA_BLOB(len(data), ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte))),
+        buf,
+    )
+
 
 def _configure_dpapi():
     crypt32 = ctypes.windll.crypt32
     kernel32 = ctypes.windll.kernel32
     blob_ptr = ctypes.POINTER(_DATA_BLOB)
     crypt32.CryptProtectData.argtypes = [
-        blob_ptr, ctypes.wintypes.LPCWSTR, ctypes.c_void_p, ctypes.c_void_p,
-        ctypes.c_void_p, ctypes.wintypes.DWORD, blob_ptr,
+        blob_ptr,
+        ctypes.wintypes.LPCWSTR,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.wintypes.DWORD,
+        blob_ptr,
     ]
     crypt32.CryptProtectData.restype = ctypes.wintypes.BOOL
     crypt32.CryptUnprotectData.argtypes = [
-        blob_ptr, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
-        ctypes.c_void_p, ctypes.wintypes.DWORD, blob_ptr,
+        blob_ptr,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.wintypes.DWORD,
+        blob_ptr,
     ]
     crypt32.CryptUnprotectData.restype = ctypes.wintypes.BOOL
     kernel32.LocalFree.argtypes = [ctypes.c_void_p]
     kernel32.LocalFree.restype = ctypes.c_void_p
     return crypt32, kernel32
+
 
 def _dpapi_encrypt(data: bytes) -> bytes:
     if os.name != "nt":
@@ -68,13 +90,22 @@ def _dpapi_encrypt(data: bytes) -> bytes:
     crypt32, kernel32 = _configure_dpapi()
     in_blob, keep = _blob(data)
     out_blob = _DATA_BLOB()
-    ok = crypt32.CryptProtectData(ctypes.byref(in_blob), "FullAlbumMaker", None, None, None, 0, ctypes.byref(out_blob))
+    ok = crypt32.CryptProtectData(
+        ctypes.byref(in_blob),
+        "FullAlbumMaker",
+        None,
+        None,
+        None,
+        0,
+        ctypes.byref(out_blob),
+    )
     if not ok:
         raise ctypes.WinError()
     try:
         return ctypes.string_at(out_blob.pbData, out_blob.cbData)
     finally:
         kernel32.LocalFree(out_blob.pbData)
+
 
 def _dpapi_decrypt(data: bytes) -> bytes:
     if os.name != "nt":
@@ -84,13 +115,41 @@ def _dpapi_decrypt(data: bytes) -> bytes:
     crypt32, kernel32 = _configure_dpapi()
     in_blob, keep = _blob(data)
     out_blob = _DATA_BLOB()
-    ok = crypt32.CryptUnprotectData(ctypes.byref(in_blob), None, None, None, None, 0, ctypes.byref(out_blob))
+    ok = crypt32.CryptUnprotectData(
+        ctypes.byref(in_blob),
+        None,
+        None,
+        None,
+        None,
+        0,
+        ctypes.byref(out_blob),
+    )
     if not ok:
         raise ctypes.WinError()
     try:
         return ctypes.string_at(out_blob.pbData, out_blob.cbData)
     finally:
         kernel32.LocalFree(out_blob.pbData)
+
+
+def _retry_after_seconds(
+    exc: urllib.error.HTTPError,
+    default: float,
+    *,
+    max_seconds: float,
+) -> float:
+    """Read numeric Retry-After with a caller-controlled upper bound."""
+    headers = getattr(exc, "headers", None)
+    raw = headers.get("Retry-After") if headers is not None else None
+    if raw is not None:
+        try:
+            value = float(str(raw).strip())
+            if value >= 0:
+                return min(max_seconds, max(0.25, value))
+        except (TypeError, ValueError):
+            pass
+    return min(max_seconds, max(0.25, float(default)))
+
 
 class GeminiKeyPool:
     def __init__(self, vault_path: Path | None = None) -> None:
@@ -130,7 +189,9 @@ class GeminiKeyPool:
         accepted = cleaned[:room]
         start = len(self.records) + 1
         for offset, key in enumerate(accepted):
-            self.records.append(KeyRecord(key=key, label=f"Key #{start + offset:02d}"))
+            self.records.append(
+                KeyRecord(key=key, label=f"Key #{start + offset:02d}")
+            )
         self.save()
         return len(accepted), max(0, len(cleaned) - len(accepted))
 
@@ -142,8 +203,16 @@ class GeminiKeyPool:
         now = time.time()
         return {
             "total": len(self.records),
-            "ready": sum(1 for r in self.records if r.enabled and now >= r.cooldown_until),
-            "cooldown": sum(1 for r in self.records if r.enabled and now < r.cooldown_until),
+            "ready": sum(
+                1
+                for r in self.records
+                if r.enabled and now >= r.cooldown_until
+            ),
+            "cooldown": sum(
+                1
+                for r in self.records
+                if r.enabled and now < r.cooldown_until
+            ),
             "disabled": sum(1 for r in self.records if not r.enabled),
         }
 
@@ -157,11 +226,22 @@ class GeminiKeyPool:
             if rec.available:
                 self._cursor = (idx + 1) % count
                 return idx, rec
-        soonest = min((r.cooldown_until for r in self.records if r.enabled), default=0)
+        soonest = min(
+            (r.cooldown_until for r in self.records if r.enabled),
+            default=0,
+        )
         wait = max(0, int(soonest - time.time()))
-        raise RuntimeError(f"Semua key sedang tidak tersedia. Coba lagi sekitar {wait} detik.")
+        raise RuntimeError(
+            f"Semua key sedang tidak tersedia. Coba lagi sekitar {wait} detik."
+        )
 
-    def request_json(self, url: str, payload: dict[str, Any], attempts: int | None = None, timeout: int = 90) -> dict[str, Any]:
+    def request_json(
+        self,
+        url: str,
+        payload: dict[str, Any],
+        attempts: int | None = None,
+        timeout: int = 90,
+    ) -> dict[str, Any]:
         if not self.records:
             raise RuntimeError("Belum ada Gemini API/Auth key.")
 
@@ -171,7 +251,8 @@ class GeminiKeyPool:
             (self._cursor + offset) % count
             for offset in range(count)
             if self.records[(self._cursor + offset) % count].enabled
-            and now >= self.records[(self._cursor + offset) % count].cooldown_until
+            and now
+            >= self.records[(self._cursor + offset) % count].cooldown_until
         ]
 
         if not ordered_indices:
@@ -180,54 +261,90 @@ class GeminiKeyPool:
                 raise RuntimeError("Semua Gemini key sedang nonaktif.")
             soonest = min(r.cooldown_until for r in enabled)
             wait = max(0, int(soonest - now))
-            raise RuntimeError(f"Semua key sedang cooldown. Coba lagi sekitar {wait} detik.")
+            raise RuntimeError(
+                f"Semua key sedang cooldown. Coba lagi sekitar {wait} detik."
+            )
 
         if attempts is not None:
-            ordered_indices = ordered_indices[:max(0, attempts)]
+            ordered_indices = ordered_indices[: max(0, attempts)]
 
         last_error = "Tidak ada key yang dapat digunakan."
 
         for idx in ordered_indices:
             rec = self.records[idx]
             self._cursor = (idx + 1) % count
-            request = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json", "x-goog-api-key": rec.key},
-                method="POST",
-            )
-            rec.last_used = time.time()
-            try:
-                with urllib.request.urlopen(request, timeout=timeout) as response:
-                    result = json.loads(response.read().decode("utf-8"))
-                    rec.failures = 0
-                    rec.last_error = ""
-                    rec.cooldown_until = 0.0
-                    self.save()
-                    return result
-            except urllib.error.HTTPError as exc:
-                body = exc.read().decode("utf-8", errors="replace")[:500]
-                rec.failures += 1
-                rec.last_error = f"HTTP {exc.code}: {body}"
-                last_error = f"Gemini HTTP {exc.code}: {body[:180]}"
+            transient_retry = 0
 
-                if exc.code == 429:
-                    rec.cooldown_until = time.time() + 60
-                elif exc.code == 401:
-                    rec.enabled = False
-                elif exc.code == 403:
-                    rec.cooldown_until = time.time() + 300
-                elif 500 <= exc.code <= 599:
-                    rec.cooldown_until = time.time() + 20
-                else:
+            while True:
+                request = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": rec.key,
+                    },
+                    method="POST",
+                )
+                rec.last_used = time.time()
+                try:
+                    with urllib.request.urlopen(
+                        request,
+                        timeout=timeout,
+                    ) as response:
+                        result = json.loads(response.read().decode("utf-8"))
+                        rec.failures = 0
+                        rec.last_error = ""
+                        rec.cooldown_until = 0.0
+                        self.save()
+                        return result
+                except urllib.error.HTTPError as exc:
+                    body = exc.read().decode(
+                        "utf-8",
+                        errors="replace",
+                    )[:500]
+                    rec.failures += 1
+                    rec.last_error = f"HTTP {exc.code}: {body}"
+                    last_error = f"Gemini HTTP {exc.code}: {body[:180]}"
+
+                    if 500 <= exc.code <= 599:
+                        if transient_retry < TRANSIENT_SERVER_RETRIES:
+                            fallback = TRANSIENT_BACKOFF_SECONDS[
+                                min(
+                                    transient_retry,
+                                    len(TRANSIENT_BACKOFF_SECONDS) - 1,
+                                )
+                            ]
+                            delay = _retry_after_seconds(
+                                exc,
+                                fallback,
+                                max_seconds=15.0,
+                            )
+                            transient_retry += 1
+                            self.save()
+                            time.sleep(delay)
+                            continue
+                        rec.cooldown_until = time.time() + 20
+                    elif exc.code == 429:
+                        rec.cooldown_until = time.time() + _retry_after_seconds(
+                            exc,
+                            60.0,
+                            max_seconds=300.0,
+                        )
+                    elif exc.code == 401:
+                        rec.enabled = False
+                    elif exc.code == 403:
+                        rec.cooldown_until = time.time() + 300
+                    else:
+                        self.save()
+                        raise RuntimeError(last_error) from exc
                     self.save()
-                    raise RuntimeError(last_error) from exc
-                self.save()
-            except (urllib.error.URLError, TimeoutError) as exc:
-                rec.failures += 1
-                rec.last_error = str(exc)
-                rec.cooldown_until = time.time() + 10
-                last_error = f"Gemini jaringan: {exc}"
-                self.save()
+                    break
+                except (urllib.error.URLError, TimeoutError) as exc:
+                    rec.failures += 1
+                    rec.last_error = str(exc)
+                    rec.cooldown_until = time.time() + 10
+                    last_error = f"Gemini jaringan: {exc}"
+                    self.save()
+                    break
 
         raise RuntimeError(last_error)
