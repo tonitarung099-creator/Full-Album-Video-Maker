@@ -63,7 +63,7 @@ def cancel_all_renderers() -> int:
     with _active_lock:
         renderers = list(_active_renderers)
     for renderer in renderers:
-        renderer.cancel()  # type: ignore[attr-defined]
+        _cancel_renderer(renderer)
     return len(renderers)
 
 
@@ -171,7 +171,11 @@ def _sync_cancel_button(window) -> None:
         return
     busy = bool(getattr(window, "render_busy", False))
     button.setEnabled(busy)
-    button.setText("■  Membatalkan Render…" if busy and _global_cancel.is_set() else "■  Batalkan Render")
+    button.setText(
+        "■  Membatalkan Render…"
+        if busy and _global_cancel.is_set()
+        else "■  Batalkan Render"
+    )
 
 
 def _patched_ui_init(self, *args, **kwargs) -> None:
@@ -297,6 +301,15 @@ def uninstall_render_lifecycle() -> None:
     if not _installed:
         return
 
+    # Stop any process while the temporary cancel method/state is still active.
+    with _active_lock:
+        renderers = list(_active_renderers)
+    for renderer in renderers:
+        try:
+            _cancel_renderer(renderer)
+        except Exception:
+            pass
+
     FFmpegRenderer._run = _originals["renderer_run"]
     FFmpegRenderer.render = _originals["renderer_render"]
     if hasattr(FFmpegRenderer, "cancel"):
@@ -318,11 +331,6 @@ def uninstall_render_lifecycle() -> None:
         delattr(MainWindow, "cancel_render")
 
     with _active_lock:
-        for renderer in list(_active_renderers):
-            try:
-                renderer.cancel()  # type: ignore[attr-defined]
-            except Exception:
-                pass
         _active_renderers.clear()
         _global_cancel.clear()
 
