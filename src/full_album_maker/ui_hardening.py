@@ -14,7 +14,6 @@ from PySide6.QtWidgets import (
 
 from . import ui as ui_module
 from .gemini_agent import GeminiAgent
-from .timeline import project_signature
 
 _installed = False
 _originals: dict[str, Any] = {}
@@ -79,6 +78,7 @@ def _make_panels_scrollable(window) -> None:
         old = splitter.replaceWidget(index, scroll)
         if old is not None:
             scroll.setWidget(old)
+            old.show()
 
 
 def _configure_preset_combo(window) -> None:
@@ -236,14 +236,15 @@ def _patched_ask_agent(self) -> None:
     self.chat.appendPlainText(f"\nANDA\n{text}\n")
     model = self.model.currentData() or "gemini-3.8-flash"
     context = self.controller.summary()
-    context_signature = project_signature(self.project)
+    context_signature = ui_module.project_signature(self.project)
     request_epoch = int(getattr(self, "_agent_epoch", 0))
+
+    if self.agent is None or self.agent.model != model:
+        self.agent = GeminiAgent(self.pool, model=model)
+    agent = self.agent
 
     def work():
         try:
-            if self.agent is None or self.agent.model != model:
-                self.agent = GeminiAgent(self.pool, model=model)
-            agent = self.agent
             decision = agent.interpret(text, context)
             setattr(decision, "_ui_epoch", request_epoch)
             self.bridge.agent_decision.emit(decision, context_signature)
