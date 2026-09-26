@@ -132,18 +132,23 @@ def _dpapi_decrypt(data: bytes) -> bytes:
         kernel32.LocalFree(out_blob.pbData)
 
 
-def _retry_after_seconds(exc: urllib.error.HTTPError, default: float) -> float:
-    """Read numeric Retry-After without allowing a transient request to stall too long."""
+def _retry_after_seconds(
+    exc: urllib.error.HTTPError,
+    default: float,
+    *,
+    max_seconds: float,
+) -> float:
+    """Read numeric Retry-After with a caller-controlled upper bound."""
     headers = getattr(exc, "headers", None)
     raw = headers.get("Retry-After") if headers is not None else None
     if raw is not None:
         try:
             value = float(str(raw).strip())
             if value >= 0:
-                return min(15.0, max(0.25, value))
+                return min(max_seconds, max(0.25, value))
         except (TypeError, ValueError):
             pass
-    return min(15.0, max(0.25, float(default)))
+    return min(max_seconds, max(0.25, float(default)))
 
 
 class GeminiKeyPool:
@@ -309,7 +314,11 @@ class GeminiKeyPool:
                                     len(TRANSIENT_BACKOFF_SECONDS) - 1,
                                 )
                             ]
-                            delay = _retry_after_seconds(exc, fallback)
+                            delay = _retry_after_seconds(
+                                exc,
+                                fallback,
+                                max_seconds=15.0,
+                            )
                             transient_retry += 1
                             self.save()
                             time.sleep(delay)
@@ -319,6 +328,7 @@ class GeminiKeyPool:
                         rec.cooldown_until = time.time() + _retry_after_seconds(
                             exc,
                             60.0,
+                            max_seconds=300.0,
                         )
                     elif exc.code == 401:
                         rec.enabled = False
