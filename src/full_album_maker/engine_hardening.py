@@ -134,7 +134,7 @@ def _patched_build_audio_track(project: Project) -> list[AudioTimelineClip]:
         raise TimelineError(
             f"Album memiliki {len(project.audios)} lagu; batas timeline adalah {MAX_TIMELINE_CLIPS}."
         )
-    return _originals["timeline_build_audio"](project)
+    return _originals["timeline_build_audio_bound"](project)
 
 
 def _patched_append_cycle(
@@ -199,7 +199,7 @@ def _patched_visual_audio_track(project: Project) -> list[AudioTimelineClip]:
         raise TimelineError(
             f"Playlist aktif memiliki {len(indices)} lagu; batas timeline adalah {MAX_TIMELINE_CLIPS}."
         )
-    return _originals["visual_build_audio"](project)
+    return _originals["visual_build_audio_bound"](project)
 
 
 def install_engine_hardening() -> None:
@@ -213,9 +213,11 @@ def install_engine_hardening() -> None:
             "project_validation": Project.validation,
             "project_needs_loop": Project.needs_loop,
             "plan_validate": TimelinePlan.validate,
-            "timeline_build_audio": timeline_module.TimelineEngine._build_audio_track,
-            "timeline_append_cycle": timeline_module.TimelineEngine._append_cycle,
-            "visual_build_audio": VisualEngine._build_audio_track,
+            "timeline_build_audio_descriptor": timeline_module.TimelineEngine.__dict__["_build_audio_track"],
+            "timeline_build_audio_bound": timeline_module.TimelineEngine._build_audio_track,
+            "timeline_append_cycle_descriptor": timeline_module.TimelineEngine.__dict__["_append_cycle"],
+            "visual_build_audio_descriptor": VisualEngine.__dict__["_build_audio_track"],
+            "visual_build_audio_bound": VisualEngine._build_audio_track,
         }
     )
 
@@ -236,8 +238,8 @@ def uninstall_engine_hardening() -> None:
     Project.validation = _originals["project_validation"]
     Project.needs_loop = _originals["project_needs_loop"]
     TimelinePlan.validate = _originals["plan_validate"]
-    timeline_module.TimelineEngine._build_audio_track = _originals["timeline_build_audio"]
-    timeline_module.TimelineEngine._append_cycle = _originals["timeline_append_cycle"]
-    VisualEngine._build_audio_track = _originals["visual_build_audio"]
+    timeline_module.TimelineEngine._build_audio_track = _originals["timeline_build_audio_descriptor"]
+    timeline_module.TimelineEngine._append_cycle = _originals["timeline_append_cycle_descriptor"]
+    VisualEngine._build_audio_track = _originals["visual_build_audio_descriptor"]
     _originals.clear()
     _installed = False
