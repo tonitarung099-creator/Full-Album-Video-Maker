@@ -55,6 +55,12 @@ def active_render_count() -> int:
         return len(_active_renderers)
 
 
+def _clear_pending_cancel_if_idle() -> None:
+    with _active_lock:
+        if not _active_renderers:
+            _global_cancel.clear()
+
+
 def cancel_all_renderers() -> int:
     # Keep the global flag set even when the worker has marked render_busy but
     # has not instantiated/registered its renderer yet. The next renderer that
@@ -233,6 +239,10 @@ def _patched_error(self, text) -> None:
 
 def _patched_render_done(self, path) -> None:
     _originals["render_done"](self, path)
+    # If cancellation happened in the tiny gap after the renderer unregistered
+    # but before the UI consumed render_done, do not leak that pending flag into
+    # the next render job.
+    _clear_pending_cancel_if_idle()
     _sync_cancel_button(self)
     if getattr(self, "_close_when_render_done", False):
         self._close_when_render_done = False
