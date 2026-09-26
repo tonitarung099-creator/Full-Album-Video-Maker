@@ -58,6 +58,23 @@ def test_removing_selected_media_prunes_active_playlist(hardened_feature):
     assert active_audio_indices(restored, strict=True) == [0]
 
 
+def test_cannot_remove_last_active_playlist_item_and_fall_back_to_all_media(hardened_feature):
+    project = Project(
+        audios=[
+            MediaItem("/media/01 - Alpha.mp3", 100.0),
+            MediaItem("/media/02 - Beta.mp3", 110.0),
+        ]
+    )
+    controller = ProjectController(project)
+    controller.execute("select_audio_by_titles", {"titles": ["Alpha"]})
+
+    with pytest.raises(ValueError, match="satu-satunya lagu"):
+        controller.execute("remove_audio", {"position": 1})
+
+    assert [item.name for item in project.audios] == ["01 - Alpha.mp3", "02 - Beta.mp3"]
+    assert active_audio_indices(project, strict=True) == [0]
+
+
 def test_missing_unused_library_song_does_not_block_active_playlist(hardened_feature, tmp_path):
     video = tmp_path / "footage.mp4"
     selected = tmp_path / "selected.mp3"

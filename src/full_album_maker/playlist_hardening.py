@@ -80,18 +80,26 @@ def _hardened_controller_execute(
     if 1 <= position <= len(self.project.audios):
         target_path = self.project.audios[position - 1].path
 
+    active_before = get_active_audio_paths(self.project)
+    if target_path is not None and active_before:
+        target_key = _path_key(target_path)
+        selected_target = any(_path_key(path) == target_key for path in active_before)
+        if selected_target and len(active_before) == 1:
+            raise ValueError(
+                "Tidak dapat menghapus satu-satunya lagu di Playlist Aktif karena playlist kosong "
+                "berarti 'pakai semua lagu'. Pilih playlist baru atau gunakan perintah 'pakai semua lagu' dulu."
+            )
+
     result = _originals["controller_execute"](self, name, args)
 
-    if target_path is not None:
-        active = get_active_audio_paths(self.project)
-        if active:
-            target_key = _path_key(target_path)
-            remaining = [path for path in active if _path_key(path) != target_key]
-            if len(remaining) != len(active):
-                set_active_audio_paths(self.project, remaining)
-                # The underlying controller produced its summary before playlist
-                # cleanup. Return a fresh summary so callers never observe stale state.
-                return self.summary()
+    if target_path is not None and active_before:
+        target_key = _path_key(target_path)
+        remaining = [path for path in active_before if _path_key(path) != target_key]
+        if len(remaining) != len(active_before):
+            set_active_audio_paths(self.project, remaining)
+            # The underlying controller produced its summary before playlist
+            # cleanup. Return a fresh summary so callers never observe stale state.
+            return self.summary()
     return result
 
 
