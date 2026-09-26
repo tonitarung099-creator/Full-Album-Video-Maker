@@ -9,6 +9,7 @@ from full_album_maker.source_integrity import install_source_integrity
 from full_album_maker.ui_hardening import install_ui_hardening
 from full_album_maker.render_lifecycle import install_render_lifecycle
 from full_album_maker.project_dirty import install_project_dirty_state
+from full_album_maker.async_import import install_async_import
 from full_album_maker.ui import run
 
 
@@ -21,6 +22,7 @@ install_source_integrity()
 install_ui_hardening()
 install_render_lifecycle()
 install_project_dirty_state()
+install_async_import()
 
 if __name__ == "__main__":
     raise SystemExit(run())
