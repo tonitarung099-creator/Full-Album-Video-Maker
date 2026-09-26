@@ -2,8 +2,17 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
+function Assert-NativeSuccess {
+    param([Parameter(Mandatory = $true)][string]$Step)
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Step gagal (exit code $LASTEXITCODE)."
+    }
+}
+
 python -m pip install --upgrade pip
+Assert-NativeSuccess "Upgrade pip"
 python -m pip install -r requirements-dev.txt
+Assert-NativeSuccess "Install dependency Python"
 
 $Url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip"
 Invoke-WebRequest -Uri $Url -OutFile ffmpeg.zip
@@ -19,16 +28,23 @@ Copy-Item $Ffmpeg.FullName "$Root\tools\ffmpeg\ffmpeg.exe" -Force
 Copy-Item $Ffprobe.FullName "$Root\tools\ffmpeg\ffprobe.exe" -Force
 
 $Encoders = & "$Root\tools\ffmpeg\ffmpeg.exe" -hide_banner -encoders 2>&1 | Out-String
+Assert-NativeSuccess "Pemeriksaan encoder FFmpeg"
 if ($Encoders -notmatch "libx264") { throw "FFmpeg build tidak memiliki libx264." }
 if ($Encoders -notmatch "libx265") { throw "FFmpeg build tidak memiliki libx265." }
 
 python -m pytest -q
+Assert-NativeSuccess "Test suite"
 
 $env:QT_QPA_PLATFORM = "offscreen"
 python "$Root\build\generate_icon.py"
+Assert-NativeSuccess "Generate icon"
 python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Full Album Maker" --icon "$Root\assets\logo.ico" --paths "$Root\src" "$Root\src\full_album_maker\main.py"
+Assert-NativeSuccess "Build PyInstaller"
 
 $App = "$Root\dist\Full Album Maker"
+if (-not (Test-Path "$App\Full Album Maker.exe")) {
+    throw "Build PyInstaller selesai tanpa menghasilkan Full Album Maker.exe."
+}
 New-Item -ItemType Directory -Force "$App\tools\ffmpeg" | Out-Null
 Copy-Item "$Root\tools\ffmpeg\ffmpeg.exe" "$App\tools\ffmpeg\ffmpeg.exe" -Force
 Copy-Item "$Root\tools\ffmpeg\ffprobe.exe" "$App\tools\ffmpeg\ffprobe.exe" -Force
@@ -49,5 +65,6 @@ New-Item -ItemType Directory -Force "$App\output" | Out-Null
 $Zip = "$Root\Full-Album-Maker-Windows-Portable.zip"
 if (Test-Path $Zip) { Remove-Item $Zip -Force }
 Compress-Archive -Path "$App" -DestinationPath $Zip
+if (-not (Test-Path $Zip)) { throw "Portable ZIP tidak berhasil dibuat." }
 
 Write-Host "Portable ZIP siap di: $Zip"
