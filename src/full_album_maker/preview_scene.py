@@ -8,6 +8,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
+from .album_visuals import format_duration_tick, normalize_visual_properties
 from .editor_models import ProjectDocument, Transform
 from .spectrum_feature import dynamic_song_text, normalize_spectrum_properties
 from .timeline_resolver import TimelineResolver
@@ -94,7 +95,14 @@ class PreviewCanvas(QWidget):
 
     @staticmethod
     def _supports_box_transform(layer) -> bool:
-        return layer.type in {"background", "spectrum"}
+        return layer.type in {
+            "background",
+            "spectrum",
+            "song_cover",
+            "vinyl",
+            "playlist_visual",
+            "progress",
+        }
 
     def _current_transform(self, layer_id: str) -> Transform:
         if layer_id == self._selected_layer_id and self._preview_transform is not None:
@@ -114,13 +122,15 @@ class PreviewCanvas(QWidget):
                     break
         return active
 
-    def _active_song(self):
-        resolved = self._resolved()
-        songs = self._document.song_map()
-        for event in resolved.songs:
+    def _active_song_event(self):
+        for event in self._resolved().songs:
             if event.start_tick <= self._playhead_tick < event.end_tick:
-                return songs.get(event.song_id)
+                return event
         return None
+
+    def _active_song(self):
+        event = self._active_song_event()
+        return self._document.song_map().get(event.song_id) if event is not None else None
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -176,6 +186,125 @@ class PreviewCanvas(QWidget):
                 motion = str(layer.properties.get("motion", "static"))
                 playback = str(layer.properties.get("playback", "loop"))
                 painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"VISUAL\n{motion} / {playback}")
+            return
+
+        if layer.type == "song_cover":
+            props = normalize_visual_properties("song_cover", layer.properties)
+            song = self._active_song()
+            asset_id = (song.cover_asset_id if song and song.cover_asset_id else None) or props["fallback_asset_id"]
+            asset = self._document.asset_map().get(asset_id) if asset_id else None
+            image = QImage(asset.locator) if asset is not None else QImage()
+            if not image.isNull():
+                scaled = image.scaled(
+                    max(1, int(rect.width())),
+                    max(1, int(rect.height())),
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding if props["fit"] == "fill" else Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                source = QRectF(
+                    max(0.0, (scaled.width() - rect.width()) / 2),
+                    max(0.0, (scaled.height() - rect.height()) / 2),
+                    min(rect.width(), scaled.width()),
+                    min(rect.height(), scaled.height()),
+                )
+                target = QRectF(rect.left(), rect.top(), source.width(), source.height())
+                painter.drawImage(target, scaled, source)
+            else:
+                painter.fillRect(rect, QColor("#20252c"))
+                painter.setPen(QColor("#9ba8b5"))
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "COVER\nBELUM ADA")
+            return
+
+        if layer.type == "vinyl":
+            props = normalize_visual_properties("vinyl", layer.properties)
+            size = min(rect.width(), rect.height())
+            disc = QRectF(rect.center().x() - size / 2, rect.center().y() - size / 2, size, size)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(props["color"]))
+            painter.drawEllipse(disc)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor(props["groove_color"]), max(1.0, size * 0.008)))
+            for ratio in (0.82, 0.67, 0.52, 0.38):
+                margin = size * (1 - ratio) / 2
+                painter.drawEllipse(disc.adjusted(margin, margin, -margin, -margin))
+            center_size = size * props["center_ratio"] * 2
+            center = QRectF(
+                disc.center().x() - center_size / 2,
+                disc.center().y() - center_size / 2,
+                center_size,
+                center_size,
+            )
+            painter.setBrush(QColor(props["center_color"]))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(center)
+            angle = (self._playhead_tick / 240000.0) / props["spin_seconds"] * math.tau
+            edge = QPointF(
+                disc.center().x() + math.cos(angle) * size * 0.42,
+                disc.center().y() + math.sin(angle) * size * 0.42,
+            )
+            painter.setPen(QPen(QColor("#737373"), max(1.0, size * 0.01)))
+            painter.drawLine(disc.center(), edge)
+            return
+
+        if layer.type == "playlist_visual":
+            props = normalize_visual_properties("playlist_visual", layer.properties)
+            bg = QColor("#000000")
+            bg.setAlphaF(props["background_opacity"])
+            painter.fillRect(rect, bg)
+            active = self._active_song()
+            songs = [song for song in self._document.playlist.entries if song.enabled][: props["max_items"]]
+            if not songs:
+                painter.setPen(QColor(props["color"]))
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "PLAYLIST KOSONG")
+                return
+            row_h = rect.height() / max(1, len(songs))
+            for index, song in enumerate(songs):
+                color = props["active_color"] if active and active.song_id == song.song_id else props["color"]
+                painter.setPen(QColor(color))
+                title = song.display_title or Path(self._document.asset_map()[song.asset_id].locator).stem
+                artist = f" — {song.display_artist}" if props["show_artist"] and song.display_artist else ""
+                number = f"{index + 1:02d}. " if props["numbered"] else ""
+                row = QRectF(rect.left() + 8, rect.top() + index * row_h, rect.width() - 16, row_h)
+                painter.drawText(row, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"{number}{title}{artist}")
+            return
+
+        if layer.type == "progress":
+            props = normalize_visual_properties("progress", layer.properties)
+            resolved = self._resolved()
+            ratio = 0.0
+            if props["mode"] == "album":
+                ratio = self._playhead_tick / max(1, resolved.duration_tick)
+            else:
+                event = self._active_song_event()
+                if event is not None:
+                    ratio = (self._playhead_tick - event.start_tick) / max(1, event.end_tick - event.start_tick)
+            ratio = max(0.0, min(1.0, ratio))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(props["background_color"]))
+            painter.drawRect(rect)
+            painter.setBrush(QColor(props["fill_color"]))
+            painter.drawRect(QRectF(rect.left(), rect.top(), rect.width() * ratio, rect.height()))
+            return
+
+        if layer.type == "song_time":
+            props = normalize_visual_properties("song_time", layer.properties)
+            resolved = self._resolved()
+            if props["mode"] == "album":
+                elapsed = min(self._playhead_tick, resolved.duration_tick)
+                total = resolved.duration_tick
+            else:
+                event = self._active_song_event()
+                if event is None:
+                    elapsed = total = 0
+                else:
+                    elapsed = max(0, self._playhead_tick - event.start_tick)
+                    total = max(0, event.end_tick - event.start_tick)
+            painter.setPen(QColor(props["color"]))
+            painter.drawText(
+                rect,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                f"{format_duration_tick(elapsed)} / {format_duration_tick(total)}",
+            )
             return
 
         if layer.type == "spectrum":
