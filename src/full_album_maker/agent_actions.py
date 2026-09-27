@@ -9,7 +9,7 @@ from .project import Project
 from .timeline import TimelineEngine, TimelinePlan, save_timeline
 
 
-ALLOWED_ACTIONS = {
+LEGACY_ACTIONS = {
     "auto_build_timeline",
     "validate_project",
     "optimize_youtube",
@@ -27,6 +27,34 @@ ALLOWED_ACTIONS = {
     "remove_audio",
     "remove_video",
 }
+
+EDITOR_V2_ACTIONS = {
+    "add_text",
+    "edit_text",
+    "move_layer",
+    "resize_layer",
+    "delete_layer",
+    "duplicate_layer",
+    "add_spectrum",
+    "set_spectrum_style",
+    "set_spectrum_range",
+    "add_playlist_visual",
+    "set_playlist_style",
+    "add_cover",
+    "set_cover_style",
+    "add_progress_bar",
+    "apply_template",
+    "save_template",
+    "move_song",
+    "reorder_playlist",
+    "remove_song",
+    "set_background",
+    "show_layer",
+    "hide_layer",
+    "render_project",
+}
+
+ALLOWED_ACTIONS = LEGACY_ACTIONS | EDITOR_V2_ACTIONS
 
 
 @dataclass(frozen=True)
@@ -58,7 +86,7 @@ class ActionExecution:
 
 
 class AppIntentExecutor:
-    """Executes Gemini intents locally. Gemini never performs timeline math itself."""
+    """Executes legacy Gemini intents locally. Editor-v2 uses ai_editor.py."""
 
     def __init__(
         self,
@@ -74,12 +102,12 @@ class AppIntentExecutor:
         result = ActionExecution()
         build_requested = any(action.name == "auto_build_timeline" for action in actions)
 
-        # Gemini is instructed to put settings before auto_build_timeline, but
-        # function-call ordering is not a safety boundary. Apply every project
-        # mutation first, then build exactly once from the final project state.
         for action in actions:
             name = action.name
             args = action.args
+
+            if name not in LEGACY_ACTIONS:
+                raise ValueError(f"Intent '{name}' hanya berlaku pada editor v2.")
 
             if name == "auto_build_timeline":
                 continue
