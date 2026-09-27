@@ -52,8 +52,35 @@ def _font_size(layer: Layer, canvas_height: int) -> int:
 def _position_expr(layer: Layer, axis: str) -> str:
     value = layer.transform.x if axis == "x" else layer.transform.y
     if not -2.0 <= value <= 2.0:
-        raise RenderCompileError(f"Transform {axis} di luar batas render S02.")
+        raise RenderCompileError(f"Transform {axis} di luar batas render editor.")
     return f"{value:.8f}*{'W' if axis == 'x' else 'H'}"
+
+
+def _overlay_position_expr(layer: Layer, axis: str) -> str:
+    value = layer.transform.x if axis == "x" else layer.transform.y
+    if not -2.0 <= value <= 2.0:
+        raise RenderCompileError(f"Transform {axis} di luar batas render editor.")
+    return f"{value:.8f}*{'main_w' if axis == 'x' else 'main_h'}"
+
+
+def _layer_size(layer: Layer, document: ProjectDocument) -> tuple[int, int]:
+    width = float(layer.transform.width)
+    height = float(layer.transform.height)
+    if not 0.02 <= width <= 3.0 or not 0.02 <= height <= 3.0:
+        raise RenderCompileError("Ukuran transform background di luar batas 0.02..3.0.")
+    return (
+        max(2, round(document.canvas.width * width)),
+        max(2, round(document.canvas.height * height)),
+    )
+
+
+def _rotation_chain(layer: Layer) -> str:
+    value = float(layer.transform.rotation)
+    if not -180.0 <= value <= 180.0:
+        raise RenderCompileError("Rotasi layer di luar batas -180..180 derajat.")
+    if abs(value) < 0.0001:
+        return ""
+    return f",rotate={value:.8f}*PI/180:ow=rotw(iw):oh=roth(ih):c=none"
 
 
 def _escape_enable(intervals: Iterable[tuple[int, int]]) -> str:
@@ -66,10 +93,11 @@ def _escape_enable(intervals: Iterable[tuple[int, int]]) -> str:
 
 
 class FFmpegV2Compiler:
-    """Pure compiler for the first editor-v2 slice.
+    """Compiler shared by final render and accurate preview.
 
-    Supported visual layers in S02: background (solid/image/video) and text.
-    Unsupported active visual types fail closed instead of being silently ignored.
+    S04 supports background solid/image/video transforms plus positioned text.
+    Other active layer types fail closed instead of silently diverging from the
+    editor preview.
     """
 
     def __init__(self, ffmpeg: str) -> None:
@@ -99,8 +127,6 @@ class FFmpegV2Compiler:
         fps = document.canvas.fps_num / document.canvas.fps_den
 
         args: list[str] = [self.ffmpeg, "-y", "-hide_banner", "-loglevel", "warning"]
-        # Input 0 is always a deterministic solid canvas; background layers are
-        # composited in normal z-order on top of it.
         args += [
             "-f", "lavfi",
             "-i",
@@ -112,13 +138,14 @@ class FFmpegV2Compiler:
         media_input_index: dict[str, int] = {}
         next_input = 1
 
-        active_layers = []
+        active_layers: list[Layer] = []
         track_map = {track.track_id: track for track in document.tracks}
         for layer in sorted(document.layers, key=lambda x: x.order):
-            if not layer.enabled or not track_map[layer.track_id].enabled:
+            track = track_map[layer.track_id]
+            if not layer.enabled or not track.enabled:
                 continue
             if layer.type not in {"background", "text"}:
-                raise RenderCompileError(f"Layer aktif belum didukung S02: {layer.type}")
+                raise RenderCompileError(f"Layer aktif belum didukung compiler S04: {layer.type}")
             active_layers.append(layer)
             if layer.type != "background":
                 continue
@@ -143,8 +170,7 @@ class FFmpegV2Compiler:
         if include_audio:
             for event in plan.audio_events:
                 asset = assets[event.asset_id]
-                key = event.song_id
-                audio_input_index[key] = next_input
+                audio_input_index[event.song_id] = next_input
                 next_input += 1
                 source_in = ticks_to_seconds(event.source_in_tick)
                 source_duration = ticks_to_seconds(event.source_out_tick - event.source_in_tick)
@@ -160,30 +186,51 @@ class FFmpegV2Compiler:
             intervals = [] if resolved_layer is None else [(x.start_tick, x.end_tick) for x in resolved_layer.intervals]
             enable = _escape_enable(intervals)
             out = f"v{stage}"
+            local_stage = stage
             stage += 1
 
             if layer.type == "background":
+                width, height = _layer_size(layer, document)
+                rotate = _rotation_chain(layer)
+                alpha = max(0.0, min(1.0, float(layer.opacity)))
+                source_label = f"bg{local_stage}"
                 mode = str(layer.properties.get("mode", "asset" if layer.asset_refs else "solid"))
                 if mode == "solid":
                     color = _color(layer.properties.get("color", document.canvas.background_color))
                     filters.append(
-                        f"[{current}]drawbox=x=0:y=0:w=iw:h=ih:color={color}:t=fill:enable='{enable}'[{out}]"
+                        f"color=c={color}:s={width}x{height}:r={fps:g}:d={duration:.6f},"
+                        f"format=rgba,colorchannelmixer=aa={alpha:.6f}{rotate}[{source_label}]"
                     )
-                    current = out
-                    continue
-                asset = assets[layer.asset_refs[0]]
-                index = media_input_index[asset.asset_id]
-                source_label = f"bg{stage}"
+                else:
+                    asset = assets[layer.asset_refs[0]]
+                    index = media_input_index[asset.asset_id]
+                    fit = str(layer.properties.get("fit", "fill"))
+                    if fit == "fill":
+                        geometry = (
+                            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+                            f"crop={width}:{height}"
+                        )
+                    elif fit in {"fit", "fit_blur"}:
+                        geometry = (
+                            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black@0"
+                        )
+                    else:
+                        raise RenderCompileError("Mode fit background tidak valid.")
+                    filters.append(
+                        f"[{index}:v]{geometry},format=rgba,colorchannelmixer=aa={alpha:.6f},"
+                        f"setpts=PTS-STARTPTS{rotate}[{source_label}]"
+                    )
                 filters.append(
-                    f"[{index}:v]scale={document.canvas.width}:{document.canvas.height}:force_original_aspect_ratio=increase,"
-                    f"crop={document.canvas.width}:{document.canvas.height},format=rgba,setpts=PTS-STARTPTS[{source_label}]"
-                )
-                filters.append(
-                    f"[{current}][{source_label}]overlay=x=0:y=0:shortest=0:eof_action=repeat:enable='{enable}'[{out}]"
+                    f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
+                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=repeat:"
+                    f"enable='{enable}'[{out}]"
                 )
                 current = out
                 continue
 
+            if abs(float(layer.transform.rotation)) > 0.0001:
+                raise RenderCompileError("Rotasi text belum didukung; rotasi hanya aktif untuk background visual pada S04.")
             text = str(layer.properties.get("text", ""))
             text_path = work / f"text-{layer.layer_id}.txt"
             text_path.write_text(text, encoding="utf-8")
@@ -243,9 +290,6 @@ class FFmpegV2Compiler:
         compiled = self.compile_video(document, destination, work_dir, include_audio=False)
         args = list(compiled.args)
         output = args.pop()
-        # Replace the video encoder/output options with a true PNG frame. Seeking
-        # happens after filtering so enable(t, ...) sees the same global timeline
-        # as final render.
         if "-c:v" in args:
             idx = args.index("-c:v")
             args[idx + 1] = "png"
