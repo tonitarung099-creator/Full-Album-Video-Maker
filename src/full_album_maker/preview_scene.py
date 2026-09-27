@@ -9,6 +9,7 @@ from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from .editor_models import ProjectDocument, Transform
+from .spectrum_feature import dynamic_song_text, normalize_spectrum_properties
 from .timeline_resolver import TimelineResolver
 
 
@@ -93,15 +94,18 @@ class PreviewCanvas(QWidget):
 
     @staticmethod
     def _supports_box_transform(layer) -> bool:
-        return layer.type == "background"
+        return layer.type in {"background", "spectrum"}
 
     def _current_transform(self, layer_id: str) -> Transform:
         if layer_id == self._selected_layer_id and self._preview_transform is not None:
             return self._preview_transform
         return self._document.layer_map()[layer_id].transform
 
+    def _resolved(self):
+        return TimelineResolver().resolve(self._document)
+
     def _active_layer_ids(self) -> set[str]:
-        resolved = TimelineResolver().resolve(self._document)
+        resolved = self._resolved()
         active: set[str] = set()
         for item in resolved.layers:
             for interval in item.intervals:
@@ -109,6 +113,14 @@ class PreviewCanvas(QWidget):
                     active.add(item.layer_id)
                     break
         return active
+
+    def _active_song(self):
+        resolved = self._resolved()
+        songs = self._document.song_map()
+        for event in resolved.songs:
+            if event.start_tick <= self._playhead_tick < event.end_tick:
+                return songs.get(event.song_id)
+        return None
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -161,9 +173,70 @@ class PreviewCanvas(QWidget):
                 painter.setBrush(QColor(22, 74, 99, 170))
                 painter.drawRect(rect)
                 painter.setPen(QColor("#bfeeff"))
-                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "VISUAL")
+                motion = str(layer.properties.get("motion", "static"))
+                playback = str(layer.properties.get("playback", "loop"))
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"VISUAL\n{motion} / {playback}")
             return
-        if layer.type in {"text", "song_title"}:
+
+        if layer.type == "spectrum":
+            try:
+                props = normalize_spectrum_properties(layer.properties)
+            except Exception:
+                props = {"style": "bars", "color": "#4de8ff", "mirror": False}
+            color = QColor(str(props.get("color", "#4de8ff")))
+            color.setAlphaF(max(0.0, min(1.0, float(layer.opacity))))
+            painter.setPen(QPen(color, 2))
+            style = str(props.get("style", "bars"))
+            phase = (self._playhead_tick / 240000.0) * 2.7
+            if style in {"bars", "spectrum_line"}:
+                count = 32
+                points: list[QPointF] = []
+                for i in range(count):
+                    x = rect.left() + (i + 0.5) * rect.width() / count
+                    envelope = 0.18 + 0.72 * abs(math.sin(phase + i * 0.47) * math.cos(i * 0.19 + phase * 0.4))
+                    top = rect.bottom() - envelope * rect.height()
+                    if style == "bars":
+                        painter.drawLine(QPointF(x, rect.bottom()), QPointF(x, top))
+                    else:
+                        points.append(QPointF(x, top))
+                if style == "spectrum_line" and len(points) > 1:
+                    for a, b in zip(points, points[1:]):
+                        painter.drawLine(a, b)
+            else:
+                middle = rect.center().y()
+                points: list[QPointF] = []
+                for i in range(64):
+                    ratio = i / 63.0
+                    x = rect.left() + ratio * rect.width()
+                    amp = math.sin(phase * 2.0 + ratio * 18.0) * math.sin(ratio * math.pi)
+                    y = middle - amp * rect.height() * 0.35
+                    points.append(QPointF(x, y))
+                for a, b in zip(points, points[1:]):
+                    painter.drawLine(a, b)
+                if style == "stereo_waveform":
+                    for a, b in zip(points, points[1:]):
+                        painter.drawLine(QPointF(a.x(), 2 * middle - a.y()), QPointF(b.x(), 2 * middle - b.y()))
+            return
+
+        if layer.type == "song_title":
+            painter.setPen(QColor(str(layer.properties.get("color", "#ffffff"))))
+            song = self._active_song()
+            if song is None:
+                text = "Judul Lagu\nArtis"
+            else:
+                text = dynamic_song_text(
+                    str(layer.properties.get("template", "{title}\n{artist}")),
+                    song.display_title,
+                    song.display_artist,
+                )
+            painter.drawText(
+                rect.adjusted(5, 4, -5, -4),
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter | Qt.TextFlag.TextWordWrap,
+                text,
+            )
+            return
+
+        if layer.type == "text":
             painter.setPen(QColor(str(layer.properties.get("color", "#ffffff"))))
             text = str(layer.properties.get("text", layer.name or "Teks"))
             painter.drawText(
