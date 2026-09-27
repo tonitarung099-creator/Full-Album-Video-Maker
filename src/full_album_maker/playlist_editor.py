@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import QAbstractTableModel, QMimeData, QModelIndex, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QHeaderView,
     QHBoxLayout,
     QInputDialog,
     QLineEdit,
@@ -80,9 +81,9 @@ class PlaylistTableModel(QAbstractTableModel):
         return values[index.column()] if 0 <= index.column() < len(values) else None
 
     def flags(self, index):
-        base = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         if not index.isValid():
-            return base | (Qt.ItemFlag.ItemIsDropEnabled if self.reorder_allowed else Qt.ItemFlag.NoItemFlags)
+            return Qt.ItemFlag.ItemIsDropEnabled if self.reorder_allowed else Qt.ItemFlag.NoItemFlags
+        base = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
         if self.reorder_allowed:
             base |= Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
         return base
@@ -124,7 +125,7 @@ class PlaylistTableModel(QAbstractTableModel):
 
 
 class PlaylistPanel(QWidget):
-    """Standalone v2 playlist panel; controller wiring is supplied by MainWindow later."""
+    """Standalone v2 playlist panel; MainWindow supplies controller wiring later."""
 
     moveRequested = Signal(str, int)
     removeRequested = Signal(str)
@@ -141,9 +142,10 @@ class PlaylistPanel(QWidget):
         self.table.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.table.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.table.setDropIndicatorShown(True)
-        self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.horizontalHeader().setSectionResizeMode(1, self.table.horizontalHeader().ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, self.table.horizontalHeader().ResizeMode.Stretch)
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
 
         self.up_button = QPushButton("Naik", self)
         self.down_button = QPushButton("Turun", self)
@@ -162,7 +164,7 @@ class PlaylistPanel(QWidget):
         layout.addLayout(buttons)
 
         self.search.textChanged.connect(self._filter_changed)
-        self.model.moveRequested.connect(self.moveRequested)
+        self.model.moveRequested.connect(self.moveRequested.emit)
         self.up_button.clicked.connect(lambda: self._move_relative(-1))
         self.down_button.clicked.connect(lambda: self._move_relative(1))
         self.move_button.clicked.connect(self._move_explicit)
@@ -188,10 +190,9 @@ class PlaylistPanel(QWidget):
         row = self._selected_row()
         selected = row is not None
         reorder = selected and self.model.reorder_allowed
+        total = len(self._document_playlist_rows())
         self.up_button.setEnabled(reorder and bool(row and row.position > 1))
-        self.down_button.setEnabled(
-            reorder and bool(row and row.position < len(self._document_playlist_rows()))
-        )
+        self.down_button.setEnabled(reorder and bool(row and row.position < total))
         self.move_button.setEnabled(selected)
         self.remove_button.setEnabled(selected)
 
