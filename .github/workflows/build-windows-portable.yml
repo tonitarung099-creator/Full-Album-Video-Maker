@@ -41,6 +41,9 @@ jobs:
           Copy-Item $ffmpeg.FullName "tools\ffmpeg\ffmpeg.exe"
           Copy-Item $ffprobe.FullName "tools\ffmpeg\ffprobe.exe"
 
+          $ffDir = (Resolve-Path "tools\ffmpeg").Path
+          $ffDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
           $encoders = & "tools\ffmpeg\ffmpeg.exe" -hide_banner -encoders 2>&1 | Out-String
           if ($encoders -notmatch "libx264") { throw "FFmpeg build tidak memiliki libx264." }
           if ($encoders -notmatch "libx265") { throw "FFmpeg build tidak memiliki libx265." }
@@ -50,6 +53,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
+          ffmpeg -version
+          ffprobe -version
           python -m pytest -q
 
       - name: Prepare Windows icon
