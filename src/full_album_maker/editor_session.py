@@ -3,6 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
+from .album_visuals import (
+    make_playlist_visual_layer,
+    make_progress_layer,
+    make_song_cover_layer,
+    make_song_time_layer,
+    make_vinyl_layer,
+)
 from .editor_commands import (
     AddLayer,
     DeleteLayer,
@@ -187,6 +194,36 @@ class EditorSession:
         layer = make_dynamic_title_layer(track_id, order)
         self.controller.dispatch(AddLayer(layer))
         self.selected_layer_ids = [layer.layer_id]
+        return self._after_mutation()
+
+    def add_song_cover_layer(self) -> ProjectDocument:
+        track_id, order = self._visual_track_and_order()
+        fallback = next((asset.asset_id for asset in self.snapshot().media if asset.kind == "image"), "")
+        layer = make_song_cover_layer(track_id, order, fallback_asset_id=fallback)
+        self.controller.dispatch(AddLayer(layer))
+        self.selected_layer_ids = [layer.layer_id]
+        return self._after_mutation()
+
+    def add_vinyl_layer(self) -> ProjectDocument:
+        track_id, order = self._visual_track_and_order()
+        layer = make_vinyl_layer(track_id, order)
+        self.controller.dispatch(AddLayer(layer))
+        self.selected_layer_ids = [layer.layer_id]
+        return self._after_mutation()
+
+    def add_playlist_visual_layer(self) -> ProjectDocument:
+        track_id, order = self._visual_track_and_order()
+        layer = make_playlist_visual_layer(track_id, order)
+        self.controller.dispatch(AddLayer(layer))
+        self.selected_layer_ids = [layer.layer_id]
+        return self._after_mutation()
+
+    def add_progress_visuals(self) -> ProjectDocument:
+        track_id, order = self._visual_track_and_order()
+        progress = make_progress_layer(track_id, order)
+        song_time = make_song_time_layer(track_id, order + 1)
+        self.controller.dispatch([AddLayer(progress), AddLayer(song_time)])
+        self.selected_layer_ids = [progress.layer_id]
         return self._after_mutation()
 
     def set_transform(self, layer_id: str, transform: Transform) -> ProjectDocument:
