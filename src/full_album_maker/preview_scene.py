@@ -91,6 +91,10 @@ class PreviewCanvas(QWidget):
             transform.height * canvas.height(),
         )
 
+    @staticmethod
+    def _supports_box_transform(layer) -> bool:
+        return layer.type == "background"
+
     def _current_transform(self, layer_id: str) -> Transform:
         if layer_id == self._selected_layer_id and self._preview_transform is not None:
             return self._preview_transform
@@ -127,10 +131,11 @@ class PreviewCanvas(QWidget):
             transform = self._current_transform(layer.layer_id)
             rect = self._rect_for_transform(canvas, transform)
             painter.save()
-            center = rect.center()
-            painter.translate(center)
-            painter.rotate(transform.rotation)
-            painter.translate(-center)
+            if self._supports_box_transform(layer):
+                center = rect.center()
+                painter.translate(center)
+                painter.rotate(transform.rotation)
+                painter.translate(-center)
             if self._accurate_frame.isNull():
                 self._paint_approx_layer(painter, rect, layer)
             if layer.layer_id == self._selected_layer_id:
@@ -161,7 +166,11 @@ class PreviewCanvas(QWidget):
         if layer.type in {"text", "song_title"}:
             painter.setPen(QColor(str(layer.properties.get("color", "#ffffff"))))
             text = str(layer.properties.get("text", layer.name or "Teks"))
-            painter.drawText(rect.adjusted(5, 4, -5, -4), Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap, text)
+            painter.drawText(
+                rect.adjusted(5, 4, -5, -4),
+                Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                text,
+            )
             return
         painter.setPen(QPen(QColor("#9db4ce"), 1, Qt.PenStyle.DashLine))
         painter.drawRect(rect)
@@ -172,7 +181,7 @@ class PreviewCanvas(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(QPen(QColor("#ffce5c") if locked else QColor("#5ee6ff"), 2))
         painter.drawRect(rect)
-        if locked:
+        if locked or not self._supports_box_transform(layer):
             return
         painter.setBrush(QColor("#5ee6ff"))
         painter.setPen(Qt.PenStyle.NoPen)
@@ -207,11 +216,12 @@ class PreviewCanvas(QWidget):
             layer, track, rect, rotation_handle = geometry
             if not layer.locked and not track.locked:
                 mode = ""
-                if math.hypot(pos.x() - rotation_handle.x(), pos.y() - rotation_handle.y()) <= 10:
-                    mode = "rotate"
-                elif math.hypot(pos.x() - rect.right(), pos.y() - rect.bottom()) <= 13:
-                    mode = "resize"
-                elif rect.adjusted(-3, -3, 3, 3).contains(pos):
+                if self._supports_box_transform(layer):
+                    if math.hypot(pos.x() - rotation_handle.x(), pos.y() - rotation_handle.y()) <= 10:
+                        mode = "rotate"
+                    elif math.hypot(pos.x() - rect.right(), pos.y() - rect.bottom()) <= 13:
+                        mode = "resize"
+                if not mode and rect.adjusted(-3, -3, 3, 3).contains(pos):
                     mode = "move"
                 if mode:
                     center = rect.center()
