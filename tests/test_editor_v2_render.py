@@ -109,8 +109,8 @@ def test_compiler_fails_closed_for_unsupported_active_layer(tmp_path: Path):
     doc.layers.append(
         Layer(
             track_id=doc.tracks[0].track_id,
-            type="spectrum",
-            name="Belum S02",
+            type="circular_spectrum",
+            name="Belum S05",
             order=2,
             time_binding=TimeBinding(kind="album"),
         )
@@ -174,7 +174,7 @@ def test_render_compile_failure_keeps_existing_output(tmp_path: Path):
     doc.layers.append(
         Layer(
             track_id=doc.tracks[0].track_id,
-            type="spectrum",
+            type="circular_spectrum",
             name="Unsupported",
             order=9,
             time_binding=TimeBinding(kind="album"),
