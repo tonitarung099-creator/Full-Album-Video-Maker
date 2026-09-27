@@ -169,8 +169,12 @@ class PlaylistServiceV2:
     @staticmethod
     def markers(document: ProjectDocument) -> list[PlaylistMarker]:
         resolved = TimelineResolver().resolve(document)
-        if resolved.errors:
-            raise CommandError("Timeline playlist belum valid: " + " | ".join(resolved.errors))
+        enabled_count = sum(1 for song in document.playlist.entries if song.enabled)
+        # Visual-layer errors must not hide playlist markers. Only a broken song
+        # schedule (a missing/invalid duration that caused a song to be skipped)
+        # blocks marker publication.
+        if len(resolved.songs) != enabled_count:
+            raise CommandError("Schedule lagu belum valid untuk membuat marker playlist.")
         song_map = document.song_map()
         assets = document.asset_map()
         result: list[PlaylistMarker] = []
