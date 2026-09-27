@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from PIL import Image
 import pytest
 
 from full_album_maker.album_visuals import (
@@ -191,9 +192,19 @@ def test_real_ffmpeg_s06_visual_album_and_accurate_preview(tmp_path: Path):
     assert '"codec_type": "video"' in probe
     assert '"codec_type": "audio"' in probe
 
-    preview = tmp_path / "s06-preview.png"
-    AccuratePreviewService(ffmpeg).render_frame(doc, seconds_to_tick(0.75), preview)
-    assert preview.exists() and preview.stat().st_size > 0
+    first_preview = tmp_path / "s06-preview-first.png"
+    second_preview = tmp_path / "s06-preview-second.png"
+    AccuratePreviewService(ffmpeg).render_frame(doc, seconds_to_tick(0.25), first_preview)
+    AccuratePreviewService(ffmpeg).render_frame(doc, seconds_to_tick(0.75), second_preview)
+    assert first_preview.exists() and second_preview.exists()
+
+    # Pixel ini berada di area aman cover (jauh dari vinyl/playlist). Ia harus
+    # berubah dari dominan merah pada lagu pertama menjadi dominan hijau pada
+    # lagu kedua. Ini membuktikan pemilihan cover mengikuti song_id aktif.
+    first_rgb = Image.open(first_preview).convert("RGB").getpixel((60, 80))
+    second_rgb = Image.open(second_preview).convert("RGB").getpixel((60, 80))
+    assert first_rgb[0] > first_rgb[1]
+    assert second_rgb[1] > second_rgb[0]
 
 
 def test_album_mode_progress_and_time_render(tmp_path: Path):
