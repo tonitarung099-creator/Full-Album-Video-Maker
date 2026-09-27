@@ -18,7 +18,6 @@ from full_album_maker.ai_editor import (
     EditorAIContextBuilder,
     deterministic_action_id,
 )
-from full_album_maker.editor_commands import SetCanvasBackground
 from full_album_maker.editor_controller import EditorController, RevisionConflict
 from full_album_maker.editor_models import (
     Layer,
@@ -94,7 +93,6 @@ def _envelope(doc: ProjectDocument, request_id: str, actions: list[AgentAction])
 
 def test_context_budget_redacts_paths_and_truncates_large_project():
     doc = _doc()
-    # Inflate without exposing raw media paths to the context.
     source = doc.playlist.entries[0]
     for index in range(80):
         doc.playlist.entries.append(
@@ -203,7 +201,7 @@ def test_stable_song_id_move_does_not_depend_on_duplicate_title():
     doc = _doc(duplicate_titles=True)
     controller = EditorController(doc)
     target = doc.playlist.entries[1]
-    action = AgentAction("move_song", {"song_id": target.song_id, "target_position": 0})
+    action = AgentAction("move_song", {"song_id": target.song_id, "target_position": 1})
     AIEditorExecutor(controller).execute(_envelope(doc, "move-id", [action]))
     assert controller.snapshot().playlist.entries[0].song_id == target.song_id
 
@@ -306,6 +304,5 @@ def test_manual_render_remains_offline_and_needs_no_gemini_key(tmp_path: Path):
         )
     )
     output = tmp_path / "offline.mp4"
-    # No GeminiKeyPool is constructed here: rendering is a purely local capability.
     result = EditorRenderService(ffmpeg=ffmpeg).render(doc, str(output))
     assert Path(result).exists() and Path(result).stat().st_size > 0
