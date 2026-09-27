@@ -83,10 +83,22 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
         self.template_combo.currentIndexChanged.connect(self._template_changed_s07)
 
     def _install_s08_actions(self) -> None:
-        self.save_custom_template_btn = QPushButton("Simpan Kustom", self)
-        self.import_custom_template_btn = QPushButton("Impor Template", self)
-        self.export_custom_template_btn = QPushButton("Ekspor Template", self)
-        self.delete_custom_template_btn = QPushButton("Hapus Kustom", self)
+        self.save_custom_template_btn = QPushButton("Simpan", self)
+        self.import_custom_template_btn = QPushButton("Impor", self)
+        self.export_custom_template_btn = QPushButton("Ekspor", self)
+        self.delete_custom_template_btn = QPushButton("Hapus", self)
+        self.save_custom_template_btn.setToolTip("Simpan layout saat ini sebagai template kustom portable")
+        self.import_custom_template_btn.setToolTip("Impor file template .famtpl.json")
+        self.export_custom_template_btn.setToolTip("Ekspor template kustom yang dipilih")
+        self.delete_custom_template_btn.setToolTip("Hapus template kustom dari folder portable")
+        for button in (
+            self.save_custom_template_btn,
+            self.import_custom_template_btn,
+            self.export_custom_template_btn,
+            self.delete_custom_template_btn,
+        ):
+            button.setMinimumWidth(0)
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.save_custom_template_btn.setObjectName("saveCustomTemplateS08")
         self.import_custom_template_btn.setObjectName("importCustomTemplateS08")
         self.export_custom_template_btn.setObjectName("exportCustomTemplateS08")
