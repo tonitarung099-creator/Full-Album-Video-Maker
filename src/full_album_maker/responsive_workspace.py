@@ -1,26 +1,30 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QGridLayout, QLabel, QPushButton, QSizePolicy, QWidget
+from PySide6.QtWidgets import QComboBox, QGridLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
 from .editor_commands import SetLayerProperty
 from .editor_models import ProjectDocument
 from .editor_workspace import EditorWorkspace
 from .spectrum_feature import apply_spectrum_preset
+from .template_system import apply_template_command, current_template_id, template_choices
 
 
 class ResponsiveEditorWorkspace(EditorWorkspace):
     """EditorWorkspace with compact controls for laptop layouts.
 
-    S06 extends the S05 editor with cover/vinyl/playlist/progress controls while
-    keeping the same project state and command stack.
+    S07 adds one-click editable templates on top of the S05/S06 visual building
+    blocks. Template application replaces only origin=template layers, preserving
+    manual layers and the same project state/undo stack.
     """
 
     def __init__(self, document: ProjectDocument | None = None, parent=None) -> None:
         super().__init__(document, parent)
         self._install_s05_actions()
         self._install_s06_actions()
+        self._install_s07_actions()
         self._rebuild_compact_toolbar()
         self._rebuild_compact_playlist_controls()
+        self._sync_template_combo()
 
     def _install_s05_actions(self) -> None:
         self.add_spectrum_btn = QPushButton("+ Spectrum", self)
@@ -38,6 +42,60 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
         self.add_vinyl_btn.clicked.connect(self._add_vinyl_s06)
         self.add_playlist_visual_btn.clicked.connect(self._add_playlist_visual_s06)
         self.add_progress_btn.clicked.connect(self._add_progress_s06)
+
+    def _install_s07_actions(self) -> None:
+        self.template_combo = QComboBox(self)
+        self.template_combo.setObjectName("templateComboS07")
+        for definition in template_choices():
+            self.template_combo.addItem(definition.label, definition.template_id)
+            index = self.template_combo.count() - 1
+            self.template_combo.setItemData(index, definition.description, role=3)
+        self.apply_template_btn = QPushButton("Terapkan Template", self)
+        self.apply_template_btn.setObjectName("applyTemplateS07")
+        self.apply_template_btn.clicked.connect(self._apply_template_s07)
+        self.template_combo.currentIndexChanged.connect(self._template_changed_s07)
+        self._template_changed_s07(self.template_combo.currentIndex())
+
+    def _template_changed_s07(self, index: int) -> None:
+        if not hasattr(self, "template_combo") or index < 0:
+            return
+        description = self.template_combo.itemData(index, role=3)
+        self.template_combo.setToolTip(str(description or ""))
+
+    def _sync_template_combo(self) -> None:
+        if not hasattr(self, "template_combo"):
+            return
+        template_id = current_template_id(self.session.snapshot())
+        if not template_id:
+            return
+        index = self.template_combo.findData(template_id)
+        if index >= 0 and index != self.template_combo.currentIndex():
+            self.template_combo.blockSignals(True)
+            self.template_combo.setCurrentIndex(index)
+            self.template_combo.blockSignals(False)
+            self._template_changed_s07(index)
+
+    def _refresh_all(self) -> None:
+        super()._refresh_all()
+        self._sync_template_combo()
+
+    def _apply_template_s07(self) -> None:
+        try:
+            template_id = str(self.template_combo.currentData() or "")
+            if not template_id:
+                raise ValueError("Pilih template terlebih dahulu.")
+            command = apply_template_command(self.session.snapshot(), template_id)
+            self.session.controller.dispatch(command)
+            doc = self.session.snapshot()
+            first = next((layer.layer_id for layer in doc.layers if layer.origin == "template"), None)
+            self.session.select_one(first)
+            self._after_edit()
+            label = self.template_combo.currentText()
+            self._set_status(
+                f"Template {label} diterapkan sebagai layer editable. Layer manual tetap dipertahankan."
+            )
+        except Exception as exc:
+            self._set_status(f"Terapkan template gagal: {exc}")
 
     def _add_spectrum_s05(self) -> None:
         try:
@@ -122,6 +180,8 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
             self.add_vinyl_btn,
             self.add_playlist_visual_btn,
             self.add_progress_btn,
+            self.template_combo,
+            self.apply_template_btn,
             self.duplicate_btn,
             self.delete_btn,
             self.use_all_btn,
@@ -147,6 +207,11 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
         grid.setHorizontalSpacing(4)
         grid.setVerticalSpacing(4)
 
+        template_label = QLabel("Template", toolbar)
+        grid.addWidget(template_label, 0, 0)
+        grid.addWidget(self.template_combo, 0, 1, 1, 2)
+        grid.addWidget(self.apply_template_btn, 0, 3)
+
         rows = [
             [self.open_btn, self.save_btn, self.undo_btn, self.redo_btn],
             [self.add_text_btn, self.add_dynamic_title_btn, self.add_spectrum_btn, self.duplicate_btn],
@@ -159,13 +224,13 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
         self.preview_btn.setText("Preview Akurat")
         self.render_btn.setText("Render V2")
 
-        for row, widgets in enumerate(rows):
+        for row, widgets in enumerate(rows, start=1):
             for column, widget in enumerate(widgets):
                 grid.addWidget(widget, row, column)
 
         zoom_label = QLabel("Zoom", toolbar)
-        grid.addWidget(zoom_label, 5, 0)
-        grid.addWidget(self.zoom_slider, 5, 1, 1, 3)
+        grid.addWidget(zoom_label, 6, 0)
+        grid.addWidget(self.zoom_slider, 6, 1, 1, 3)
         grid.setColumnStretch(3, 1)
 
         root.insertWidget(0, toolbar)
