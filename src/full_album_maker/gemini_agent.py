@@ -36,7 +36,7 @@ Aturan keras:
 4. Jangan mengubah urutan lagu/video kecuali pengguna meminta.
 5. Jika pengguna meminta beberapa aksi, keluarkan function call sesuai urutan logis.
    Setting harus diterapkan SEBELUM auto_build_timeline.
-6. Tidak ada fungsi render. Jangan mengklaim render sudah dimulai/selesai.
+6. Tidak ada fungsi render pada registry legacy. Jangan mengklaim render sudah dimulai/selesai.
 7. Jika maksud pengguna cukup jelas, jangan bertanya ulang.
 8. Jika pengguna hanya bertanya informasi, boleh jawab teks singkat tanpa function call.
 9. Jika ada function call, teks pendamping hanya menyatakan pemahaman/niat, bukan klaim hasil.
@@ -207,9 +207,16 @@ class GeminiAgent:
         self,
         pool: GeminiKeyPool,
         model: str = "gemini-3.8-flash",
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        system_prompt: str | None = None,
+        history_limit: int = 16,
     ) -> None:
         self.pool = pool
         self.model = model
+        self.tools = list(tools) if tools is not None else list(TOOLS)
+        self.system_prompt = str(system_prompt) if system_prompt is not None else SYSTEM
+        self.history_limit = max(2, min(32, int(history_limit)))
         self.history: list[dict[str, Any]] = []
 
     def _url(self) -> str:
@@ -237,14 +244,14 @@ class GeminiAgent:
                 "systemInstruction": {
                     "parts": [
                         {
-                            "text": SYSTEM
+                            "text": self.system_prompt
                             + "\n\nKONTEKS PROYEK SAAT INI (jangan dihitung ulang):\n"
                             + context_text
                         }
                     ]
                 },
-                "contents": self.history[-16:],
-                "tools": [{"functionDeclarations": TOOLS}],
+                "contents": self.history[-self.history_limit :],
+                "tools": [{"functionDeclarations": self.tools}],
             }
             response = self.pool.request_json(self._url(), payload)
             candidates = response.get("candidates") or []
@@ -277,10 +284,8 @@ class GeminiAgent:
             elif not actions and not message:
                 message = "Saya belum menemukan aksi aplikasi yang perlu dijalankan."
 
-            # Keep only safe conversational text in history. Raw function calls are not
-            # stored because the app, not Gemini, executes them outside the API tool loop.
             self.history.append({"role": "model", "parts": [{"text": message}]})
-            self.history = self.history[-16:]
+            self.history = self.history[-self.history_limit :]
             return AgentDecision(message=message, actions=actions)
         except Exception:
             del self.history[history_start:]

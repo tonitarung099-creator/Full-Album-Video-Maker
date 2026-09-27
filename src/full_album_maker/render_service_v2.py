@@ -10,7 +10,7 @@ from typing import Callable
 
 from .atomic_io import atomic_write_text
 from .editor_models import ProjectDocument
-from .paths import ffmpeg_path, output_dir, temp_dir
+from .paths import ffmpeg_path, output_dir
 from .render_graph import FFmpegV2Compiler, RenderCompileError
 from .render_plan import RenderPlan
 
@@ -119,13 +119,23 @@ class EditorRenderService:
         snapshot.validate()
         destination = destination or str(output_dir() / "FULL_ALBUM_FINAL.mp4")
         dest = Path(destination).resolve()
-        active_sources = {Path(asset.locator).resolve() for asset in snapshot.media if asset.locator}
+        active_sources = {
+            Path(asset.locator).resolve()
+            for asset in snapshot.media
+            if asset.locator
+        }
         if dest in active_sources:
             raise RenderErrorV2("Lokasi output tidak boleh menimpa media proyek.")
-        # Only media referenced by active songs/layers should block; unused media
-        # remains editable/relinkable without preventing an otherwise valid render.
-        active_asset_ids = {song.asset_id for song in snapshot.playlist.entries if song.enabled}
-        active_asset_ids.update(ref for layer in snapshot.layers if layer.enabled for ref in layer.asset_refs)
+
+        active_asset_ids = {
+            song.asset_id for song in snapshot.playlist.entries if song.enabled
+        }
+        active_asset_ids.update(
+            ref
+            for layer in snapshot.layers
+            if layer.enabled
+            for ref in layer.asset_refs
+        )
         assets = snapshot.asset_map()
         missing = [
             str(Path(assets[asset_id].locator))
@@ -133,10 +143,16 @@ class EditorRenderService:
             if asset_id in assets and not Path(assets[asset_id].locator).exists()
         ]
         if missing:
-            raise RenderErrorV2("Media aktif tidak ditemukan: " + ", ".join(missing[:8]))
+            raise RenderErrorV2(
+                "Media aktif tidak ditemukan: " + ", ".join(missing[:8])
+            )
 
         dest.parent.mkdir(parents=True, exist_ok=True)
-        fd, staged_name = tempfile.mkstemp(prefix=f".{dest.stem}.", suffix=".v2-rendering.mp4", dir=dest.parent)
+        fd, staged_name = tempfile.mkstemp(
+            prefix=f".{dest.stem}.",
+            suffix=".v2-rendering.mp4",
+            dir=dest.parent,
+        )
         os.close(fd)
         staged = Path(staged_name)
         staged.unlink(missing_ok=True)
@@ -145,15 +161,30 @@ class EditorRenderService:
         timeline = dest.with_name(f"{dest.stem}_Timeline_Final.json")
         stages: list[Path] = [staged]
         try:
-            with tempfile.TemporaryDirectory(prefix="fam_v2_", dir=temp_dir()) as folder:
+            # Keep all transaction staging on the destination filesystem. Windows
+            # os.replace cannot atomically move a sidecar from e.g. portable app D:
+            # to an output folder on C:. A hidden work directory beside the output
+            # preserves same-filesystem atomic publication and is removed afterward.
+            with tempfile.TemporaryDirectory(
+                prefix=f".{dest.stem}.fam-v2-",
+                dir=dest.parent,
+            ) as folder:
                 work = Path(folder)
-                compiled = FFmpegV2Compiler(self.ffmpeg).compile_video(snapshot, staged, work)
+                compiled = FFmpegV2Compiler(self.ffmpeg).compile_video(
+                    snapshot,
+                    staged,
+                    work,
+                )
                 if log:
                     log(
                         f"Render v2 revision {snapshot.revision}; durasi "
                         f"{compiled.render_plan.duration_tick / snapshot.timebase:.3f} detik."
                     )
-                self.runner.run(compiled.args, cancel_event=cancel_event, log=log)
+                self.runner.run(
+                    compiled.args,
+                    cancel_event=cancel_event,
+                    log=log,
+                )
                 if cancel_event is not None and cancel_event.is_set():
                     raise RenderCancelledV2("Render dibatalkan oleh pengguna.")
 
@@ -164,15 +195,22 @@ class EditorRenderService:
                 _write_tracklist(staged_tracklist, snapshot, compiled.render_plan)
                 atomic_write_text(
                     staged_timeline,
-                    json.dumps(compiled.render_plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
+                    json.dumps(
+                        compiled.render_plan.to_dict(),
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
                 )
-                stages.extend([staged_chapter, staged_tracklist, staged_timeline])
+                stages.extend(
+                    [staged_chapter, staged_tracklist, staged_timeline]
+                )
 
-                # Keep the proven transactional publisher as the single publication
-                # mechanism. Import lazily so pure domain/compiler tests stay Qt-free.
                 from .atomic_bundle import publish_bundle_transactional
 
-                publish_bundle_transactional(zip(stages, [dest, chapter, tracklist, timeline]))
+                publish_bundle_transactional(
+                    zip(stages, [dest, chapter, tracklist, timeline])
+                )
         except (RenderCompileError, OSError, subprocess.SubprocessError) as exc:
             raise RenderErrorV2(str(exc)) from exc
         finally:
