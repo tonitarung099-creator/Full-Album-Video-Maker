@@ -183,7 +183,7 @@ def test_ffmpeg_compiler_contains_background_editor_transform(tmp_path: Path):
 def test_text_rotation_fails_closed_until_render_parity_exists(tmp_path: Path):
     doc, _, text = _doc()
     doc.layer_map()[text.layer_id].transform.rotation = 10
-    with pytest.raises(RenderCompileError, match="Rotasi text belum didukung"):
+    with pytest.raises(RenderCompileError, match=r"Rotasi text.*belum didukung"):
         FFmpegV2Compiler("ffmpeg").compile_video(
             doc,
             tmp_path / "out.mp4",
