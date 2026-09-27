@@ -78,7 +78,7 @@ class EditorMainWindow(LegacyMainWindow):
 
     def _update_editor_title(self) -> None:
         title = self.windowTitle().replace(" • Editor V2 *", "").replace(" • Editor V2", "")
-        suffix = " • Editor V2 *" if self.editor_workspace.is_dirty else " • Editor V2"
+        suffix = " • Editor V2 *" if self.editor_workspace.session.is_dirty else " • Editor V2"
         self.setWindowTitle(title + suffix)
 
     def closeEvent(self, event) -> None:
@@ -91,7 +91,7 @@ class EditorMainWindow(LegacyMainWindow):
                 )
                 event.ignore()
                 return
-            if self.editor_workspace.is_dirty:
+            if self.editor_workspace.session.is_dirty:
                 answer = QMessageBox.question(
                     self,
                     "Perubahan Editor V2 belum disimpan",
