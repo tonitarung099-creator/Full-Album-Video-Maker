@@ -7,6 +7,7 @@ from typing import Iterable
 
 from .editor_models import Layer, ProjectDocument, TIMEBASE
 from .render_plan import RenderPlan, compile_render_plan
+from .spectrum_feature import dynamic_song_text, normalize_spectrum_properties
 from .timeline_resolver import TimelineResolver
 
 
@@ -67,7 +68,7 @@ def _layer_size(layer: Layer, document: ProjectDocument) -> tuple[int, int]:
     width = float(layer.transform.width)
     height = float(layer.transform.height)
     if not 0.02 <= width <= 3.0 or not 0.02 <= height <= 3.0:
-        raise RenderCompileError("Ukuran transform background di luar batas 0.02..3.0.")
+        raise RenderCompileError("Ukuran transform visual di luar batas 0.02..3.0.")
     return (
         max(2, round(document.canvas.width * width)),
         max(2, round(document.canvas.height * height)),
@@ -92,12 +93,28 @@ def _escape_enable(intervals: Iterable[tuple[int, int]]) -> str:
     return "+".join(pieces) or "0"
 
 
+def _intersect_intervals(
+    intervals: Iterable[tuple[int, int]], start_tick: int, end_tick: int
+) -> list[tuple[int, int]]:
+    result: list[tuple[int, int]] = []
+    for start, end in intervals:
+        left = max(start, start_tick)
+        right = min(end, end_tick)
+        if right > left:
+            result.append((left, right))
+    return result
+
+
+def _ffmpeg_scale(value: str) -> str:
+    return {"linear": "lin", "sqrt": "sqrt", "cbrt": "cbrt", "log": "log", "rlog": "rlog"}.get(value, value)
+
+
 class FFmpegV2Compiler:
     """Compiler shared by final render and accurate preview.
 
-    S04 supports background solid/image/video transforms plus positioned text.
-    Other active layer types fail closed instead of silently diverging from the
-    editor preview.
+    S05 adds real audio-driven spectrum/waveform layers and dynamic song-title
+    layers. Preview Akurat calls this same compiler, so supported visuals never
+    use a separate approximation path for the frame that is shown as accurate.
     """
 
     def __init__(self, ffmpeg: str) -> None:
@@ -134,18 +151,25 @@ class FFmpegV2Compiler:
         ]
 
         assets = document.asset_map()
+        songs = document.song_map()
         resolved_by_layer = {item.layer_id: item for item in resolved.layers}
         media_input_index: dict[str, int] = {}
         next_input = 1
 
         active_layers: list[Layer] = []
         track_map = {track.track_id: track for track in document.tracks}
+        supported = {"background", "text", "song_title", "spectrum"}
         for layer in sorted(document.layers, key=lambda x: x.order):
             track = track_map[layer.track_id]
             if not layer.enabled or not track.enabled:
                 continue
-            if layer.type not in {"background", "text"}:
-                raise RenderCompileError(f"Layer aktif belum didukung compiler S04: {layer.type}")
+            if layer.type not in supported:
+                raise RenderCompileError(f"Layer aktif belum didukung compiler S05: {layer.type}")
+            if layer.type == "spectrum":
+                try:
+                    normalize_spectrum_properties(layer.properties)
+                except ValueError as exc:
+                    raise RenderCompileError(str(exc)) from exc
             active_layers.append(layer)
             if layer.type != "background":
                 continue
@@ -164,10 +188,18 @@ class FFmpegV2Compiler:
             if asset.kind == "image":
                 args += ["-loop", "1", "-i", asset.locator]
             else:
-                args += ["-stream_loop", "-1", "-an", "-i", asset.locator]
+                playback = str(layer.properties.get("playback", "loop"))
+                if playback not in {"loop", "freeze"}:
+                    raise RenderCompileError("playback background harus loop/freeze.")
+                if playback == "loop":
+                    args += ["-stream_loop", "-1", "-an", "-i", asset.locator]
+                else:
+                    args += ["-an", "-i", asset.locator]
 
+        spectrum_layers = [layer for layer in active_layers if layer.type == "spectrum"]
+        needs_album_audio = include_audio or bool(spectrum_layers)
         audio_input_index: dict[str, int] = {}
-        if include_audio:
+        if needs_album_audio:
             for event in plan.audio_events:
                 asset = assets[event.asset_id]
                 audio_input_index[event.song_id] = next_input
@@ -179,17 +211,45 @@ class FFmpegV2Compiler:
         filters: list[str] = ["[0:v]setpts=PTS-STARTPTS[v0]"]
         current = "v0"
         text_files: list[Path] = []
-        stage = 1
 
+        spectrum_audio_labels: dict[str, str] = {}
+        if needs_album_audio:
+            audio_labels: list[str] = []
+            for idx, event in enumerate(plan.audio_events):
+                input_index = audio_input_index[event.song_id]
+                label = f"aseg{idx}"
+                event_duration = ticks_to_seconds(event.end_tick - event.start_tick)
+                filters.append(
+                    f"[{input_index}:a]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+                    f"atrim=duration={event_duration:.6f},asetpts=PTS-STARTPTS[{label}]"
+                )
+                audio_labels.append(f"[{label}]")
+            filters.append("".join(audio_labels) + f"concat=n={len(audio_labels)}:v=0:a=1[album_audio]")
+
+            branches: list[tuple[str, str]] = []
+            if include_audio:
+                branches.append(("render", "aout"))
+            for idx, layer in enumerate(spectrum_layers):
+                label = f"specaudio{idx}"
+                branches.append((layer.layer_id, label))
+                spectrum_audio_labels[layer.layer_id] = label
+            if len(branches) == 1:
+                filters.append(f"[album_audio]anull[{branches[0][1]}]")
+            else:
+                outputs = "".join(f"[{label}]" for _, label in branches)
+                filters.append(f"[album_audio]asplit={len(branches)}{outputs}")
+
+        stage = 1
+        spectrum_index = 0
         for layer in active_layers:
             resolved_layer = resolved_by_layer.get(layer.layer_id)
             intervals = [] if resolved_layer is None else [(x.start_tick, x.end_tick) for x in resolved_layer.intervals]
             enable = _escape_enable(intervals)
-            out = f"v{stage}"
-            local_stage = stage
-            stage += 1
 
             if layer.type == "background":
+                out = f"v{stage}"
+                local_stage = stage
+                stage += 1
                 width, height = _layer_size(layer, document)
                 rotate = _rotation_chain(layer)
                 alpha = max(0.0, min(1.0, float(layer.opacity)))
@@ -206,37 +266,122 @@ class FFmpegV2Compiler:
                     index = media_input_index[asset.asset_id]
                     fit = str(layer.properties.get("fit", "fill"))
                     if fit == "fill":
-                        geometry = (
-                            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
-                            f"crop={width}:{height}"
-                        )
+                        geometry = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
                     elif fit in {"fit", "fit_blur"}:
-                        geometry = (
-                            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black@0"
-                        )
+                        geometry = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black@0"
                     else:
                         raise RenderCompileError("Mode fit background tidak valid.")
+                    playback = str(layer.properties.get("playback", "loop"))
+                    freeze = ""
+                    if asset.kind == "video" and playback == "freeze":
+                        freeze = f",trim=end_frame=1,loop=loop=-1:size=1:start=0,setpts=N/{fps:g}/TB"
+                    motion = str(layer.properties.get("motion", "static"))
+                    if motion not in {"static", "zoom_in", "zoom_out", "pan_left", "pan_right"}:
+                        raise RenderCompileError("Motion background belum didukung.")
+                    motion_chain = ""
+                    frame_count = max(1, round(duration * fps))
+                    if motion == "zoom_in":
+                        motion_chain = f",zoompan=z='min(1.08,1+0.08*on/{frame_count})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={width}x{height}:fps={fps:g}"
+                    elif motion == "zoom_out":
+                        motion_chain = f",zoompan=z='max(1,1.08-0.08*on/{frame_count})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={width}x{height}:fps={fps:g}"
+                    elif motion in {"pan_left", "pan_right"}:
+                        direction = "1" if motion == "pan_right" else f"1-on/{frame_count}"
+                        if motion == "pan_right":
+                            x_expr = f"(iw-iw/zoom)*on/{frame_count}"
+                        else:
+                            x_expr = f"(iw-iw/zoom)*(1-on/{frame_count})"
+                        motion_chain = f",zoompan=z='1.08':x='{x_expr}':y='ih/2-(ih/zoom/2)':d=1:s={width}x{height}:fps={fps:g}"
                     filters.append(
-                        f"[{index}:v]{geometry},format=rgba,colorchannelmixer=aa={alpha:.6f},"
+                        f"[{index}:v]{geometry}{freeze}{motion_chain},format=rgba,colorchannelmixer=aa={alpha:.6f},"
                         f"setpts=PTS-STARTPTS{rotate}[{source_label}]"
                     )
                 filters.append(
                     f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
-                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=repeat:"
-                    f"enable='{enable}'[{out}]"
+                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=repeat:enable='{enable}'[{out}]"
                 )
                 current = out
                 continue
 
+            if layer.type == "spectrum":
+                out = f"v{stage}"
+                local_stage = stage
+                stage += 1
+                width, height = _layer_size(layer, document)
+                props = normalize_spectrum_properties(layer.properties)
+                style = props["style"]
+                gain = props["gain"]
+                color = _color(props["color"])
+                ascale = _ffmpeg_scale(props["amplitude_scale"])
+                audio_label = spectrum_audio_labels[layer.layer_id]
+                source_label = f"spec{local_stage}"
+                if style in {"bars", "spectrum_line"}:
+                    mode = "bar" if style == "bars" else "line"
+                    fscale = _ffmpeg_scale(props["frequency_scale"])
+                    visualizer = (
+                        f"showfreqs=s={width}x{height}:mode={mode}:fscale={fscale}:ascale={ascale}:"
+                        f"colors={color}"
+                    )
+                else:
+                    split = ":split_channels=1" if style == "stereo_waveform" else ""
+                    visualizer = f"showwaves=s={width}x{height}:mode=line:scale={ascale}:colors={color}{split}"
+                mirror = ",vflip" if props["mirror"] else ""
+                rotate = _rotation_chain(layer)
+                alpha = max(0.0, min(1.0, float(layer.opacity)))
+                filters.append(
+                    f"[{audio_label}]volume={gain:.6f},{visualizer},format=rgba,"
+                    f"colorkey=0x000000:0.08:0.0,colorchannelmixer=aa={alpha:.6f}{mirror}{rotate}[{source_label}]"
+                )
+                filters.append(
+                    f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
+                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=pass:enable='{enable}'[{out}]"
+                )
+                current = out
+                spectrum_index += 1
+                continue
+
             if abs(float(layer.transform.rotation)) > 0.0001:
-                raise RenderCompileError("Rotasi text belum didukung; rotasi hanya aktif untuk background visual pada S04.")
+                raise RenderCompileError("Rotasi text/judul dinamis belum didukung.")
+
+            if layer.type == "song_title":
+                template = str(layer.properties.get("template", "{title}\n{artist}"))
+                fontcolor = _color(layer.properties.get("color", "#ffffff"))
+                fontsize = _font_size(layer, document.canvas.height)
+                for event in plan.audio_events:
+                    event_intervals = _intersect_intervals(intervals, event.start_tick, event.end_tick)
+                    if not event_intervals:
+                        continue
+                    song = songs[event.song_id]
+                    text = dynamic_song_text(template, song.display_title, song.display_artist)
+                    text_path = work / f"song-title-{layer.layer_id}-{event.song_id}.txt"
+                    text_path.write_text(text, encoding="utf-8")
+                    text_files.append(text_path)
+                    out = f"v{stage}"
+                    stage += 1
+                    parts = [
+                        f"textfile='{_filter_path(text_path)}'",
+                        "reload=0",
+                        f"x={_position_expr(layer, 'x')}",
+                        f"y={_position_expr(layer, 'y')}",
+                        f"fontsize={fontsize}",
+                        f"fontcolor={fontcolor}",
+                        f"alpha={layer.opacity:.6f}",
+                        f"enable='{_escape_enable(event_intervals)}'",
+                    ]
+                    font_path = str(layer.properties.get("font_path", "") or "").strip()
+                    if font_path:
+                        parts.insert(0, f"fontfile='{_filter_path(Path(font_path))}'")
+                    filters.append(f"[{current}]drawtext=" + ":".join(parts) + f"[{out}]")
+                    current = out
+                continue
+
             text = str(layer.properties.get("text", ""))
             text_path = work / f"text-{layer.layer_id}.txt"
             text_path.write_text(text, encoding="utf-8")
             text_files.append(text_path)
             fontcolor = _color(layer.properties.get("color", "#ffffff"))
             fontsize = _font_size(layer, document.canvas.height)
+            out = f"v{stage}"
+            stage += 1
             parts = [
                 f"textfile='{_filter_path(text_path)}'",
                 "reload=0",
@@ -254,19 +399,6 @@ class FFmpegV2Compiler:
             current = out
 
         filters.append(f"[{current}]format=yuv420p[vout]")
-
-        if include_audio:
-            audio_labels: list[str] = []
-            for idx, event in enumerate(plan.audio_events):
-                input_index = audio_input_index[event.song_id]
-                label = f"a{idx}"
-                event_duration = ticks_to_seconds(event.end_tick - event.start_tick)
-                filters.append(
-                    f"[{input_index}:a]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
-                    f"atrim=duration={event_duration:.6f},asetpts=PTS-STARTPTS[{label}]"
-                )
-                audio_labels.append(f"[{label}]")
-            filters.append("".join(audio_labels) + f"concat=n={len(audio_labels)}:v=0:a=1[aout]")
 
         args += ["-filter_complex", ";".join(filters), "-map", "[vout]"]
         if include_audio:

@@ -1,23 +1,61 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QGridLayout, QLabel, QSizePolicy, QWidget
+from PySide6.QtWidgets import QGridLayout, QLabel, QPushButton, QSizePolicy, QWidget
 
+from .editor_commands import SetLayerProperty
 from .editor_models import ProjectDocument
 from .editor_workspace import EditorWorkspace
+from .spectrum_feature import apply_spectrum_preset
 
 
 class ResponsiveEditorWorkspace(EditorWorkspace):
     """EditorWorkspace with compact controls for laptop layouts.
 
-    The base workspace owns all actions/signals. This class only changes their
-    presentation so the center editor can coexist with Media + AI panels on a
-    1366px desktop without clipping or overlap.
+    S05 keeps the compact S04 surface and adds manual Spectrum + Dynamic Title
+    actions without hiding Media/AI panels on 1366px screens.
     """
 
     def __init__(self, document: ProjectDocument | None = None, parent=None) -> None:
         super().__init__(document, parent)
+        self._install_s05_actions()
         self._rebuild_compact_toolbar()
         self._rebuild_compact_playlist_controls()
+
+    def _install_s05_actions(self) -> None:
+        self.add_spectrum_btn = QPushButton("+ Spectrum", self)
+        self.add_dynamic_title_btn = QPushButton("+ Judul Lagu", self)
+        self.add_spectrum_btn.clicked.connect(self._add_spectrum_s05)
+        self.add_dynamic_title_btn.clicked.connect(self._add_dynamic_title_s05)
+        self.inspector.spectrumPresetRequested.connect(self._apply_spectrum_preset_s05)
+
+    def _add_spectrum_s05(self) -> None:
+        try:
+            self.session.add_spectrum_layer("neon_bars")
+            self._after_edit()
+            self._set_status("Spectrum audio nyata ditambahkan. Preview Akurat memakai compiler final yang sama.")
+        except Exception as exc:
+            self._set_status(f"Tambah spectrum gagal: {exc}")
+
+    def _add_dynamic_title_s05(self) -> None:
+        try:
+            self.session.add_dynamic_title_layer()
+            self._after_edit()
+            self._set_status("Judul lagu dinamis ditambahkan dan mengikuti metadata playlist aktif.")
+        except Exception as exc:
+            self._set_status(f"Tambah judul dinamis gagal: {exc}")
+
+    def _apply_spectrum_preset_s05(self, layer_id: str, preset_id: str) -> None:
+        try:
+            layer = self.session.snapshot().layer_map().get(layer_id)
+            if layer is None or layer.type != "spectrum":
+                raise ValueError("Layer spectrum tidak ditemukan.")
+            properties = apply_spectrum_preset(layer.properties, preset_id)
+            commands = [SetLayerProperty(layer_id, key, value) for key, value in properties.items()]
+            self.session.controller.dispatch(commands)
+            self._after_edit()
+            self._set_status(f"Preset spectrum diterapkan: {preset_id}.")
+        except Exception as exc:
+            self._set_status(f"Preset spectrum gagal: {exc}")
 
     def _rebuild_compact_toolbar(self) -> None:
         root = self.layout()
@@ -35,6 +73,8 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
             self.undo_btn,
             self.redo_btn,
             self.add_text_btn,
+            self.add_spectrum_btn,
+            self.add_dynamic_title_btn,
             self.duplicate_btn,
             self.delete_btn,
             self.use_all_btn,
@@ -62,8 +102,9 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
 
         rows = [
             [self.open_btn, self.save_btn, self.undo_btn, self.redo_btn],
-            [self.add_text_btn, self.duplicate_btn, self.delete_btn, self.use_all_btn],
-            [self.auto_btn, self.play_btn, self.preview_btn, self.render_btn],
+            [self.add_text_btn, self.add_dynamic_title_btn, self.add_spectrum_btn, self.duplicate_btn],
+            [self.delete_btn, self.use_all_btn, self.auto_btn, self.play_btn],
+            [self.preview_btn, self.render_btn, self.snap_check],
         ]
 
         self.use_all_btn.setText("Semua Lagu")
@@ -74,10 +115,9 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
             for column, widget in enumerate(widgets):
                 grid.addWidget(widget, row, column)
 
-        grid.addWidget(self.snap_check, 3, 0)
         zoom_label = QLabel("Zoom", toolbar)
-        grid.addWidget(zoom_label, 3, 1)
-        grid.addWidget(self.zoom_slider, 3, 2, 1, 2)
+        grid.addWidget(zoom_label, 4, 0)
+        grid.addWidget(self.zoom_slider, 4, 1, 1, 3)
         grid.setColumnStretch(3, 1)
 
         root.insertWidget(0, toolbar)
