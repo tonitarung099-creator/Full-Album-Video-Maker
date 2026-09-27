@@ -1,27 +1,58 @@
 from __future__ import annotations
 
-from PySide6.QtWidgets import QComboBox, QGridLayout, QLabel, QPushButton, QSizePolicy, QWidget
+from pathlib import Path
 
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFileDialog,
+    QGridLayout,
+    QInputDialog,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QWidget,
+)
+
+from .custom_template_builder import (
+    CUSTOM_TEMPLATE_SUFFIX,
+    CustomTemplateStore,
+    SetCustomTemplateMarker,
+    apply_builtin_template_commands,
+    apply_custom_template_commands,
+    current_custom_template_id,
+    current_template_reference,
+    is_custom_template_id,
+)
 from .editor_commands import SetLayerProperty
 from .editor_models import ProjectDocument
 from .editor_workspace import EditorWorkspace
 from .spectrum_feature import apply_spectrum_preset
-from .template_system import apply_template_command, current_template_id, template_choices
+from .template_system import apply_template_command, template_choices
 
 
 class ResponsiveEditorWorkspace(EditorWorkspace):
-    """EditorWorkspace with compact controls for laptop layouts.
+    """Compact editor workspace for laptop layouts.
 
-    S07 adds one-click editable templates on top of the S05/S06 visual building
-    blocks. Template application replaces only origin=template layers, preserving
-    manual layers and the same project state/undo stack.
+    S08 extends the built-in S07 template selector with portable custom templates.
+    Custom templates live under data/templates/custom in the portable app folder,
+    can be exported/imported, and still resolve to normal editable project layers.
     """
 
-    def __init__(self, document: ProjectDocument | None = None, parent=None) -> None:
+    def __init__(
+        self,
+        document: ProjectDocument | None = None,
+        parent=None,
+        *,
+        custom_template_root: str | Path | None = None,
+    ) -> None:
+        self.custom_template_store = CustomTemplateStore(custom_template_root)
         super().__init__(document, parent)
         self._install_s05_actions()
         self._install_s06_actions()
         self._install_s07_actions()
+        self._install_s08_actions()
+        self._reload_template_catalog_s08()
         self._rebuild_compact_toolbar()
         self._rebuild_compact_playlist_controls()
         self._sync_template_combo()
@@ -46,26 +77,70 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
     def _install_s07_actions(self) -> None:
         self.template_combo = QComboBox(self)
         self.template_combo.setObjectName("templateComboS07")
-        for definition in template_choices():
-            self.template_combo.addItem(definition.label, definition.template_id)
-            index = self.template_combo.count() - 1
-            self.template_combo.setItemData(index, definition.description, role=3)
         self.apply_template_btn = QPushButton("Terapkan Template", self)
         self.apply_template_btn.setObjectName("applyTemplateS07")
         self.apply_template_btn.clicked.connect(self._apply_template_s07)
         self.template_combo.currentIndexChanged.connect(self._template_changed_s07)
+
+    def _install_s08_actions(self) -> None:
+        self.save_custom_template_btn = QPushButton("Simpan Kustom", self)
+        self.import_custom_template_btn = QPushButton("Impor Template", self)
+        self.export_custom_template_btn = QPushButton("Ekspor Template", self)
+        self.delete_custom_template_btn = QPushButton("Hapus Kustom", self)
+        self.save_custom_template_btn.setObjectName("saveCustomTemplateS08")
+        self.import_custom_template_btn.setObjectName("importCustomTemplateS08")
+        self.export_custom_template_btn.setObjectName("exportCustomTemplateS08")
+        self.delete_custom_template_btn.setObjectName("deleteCustomTemplateS08")
+        self.save_custom_template_btn.clicked.connect(self._save_custom_template_s08)
+        self.import_custom_template_btn.clicked.connect(self._import_custom_template_s08)
+        self.export_custom_template_btn.clicked.connect(self._export_custom_template_s08)
+        self.delete_custom_template_btn.clicked.connect(self._delete_custom_template_s08)
+
+    def _reload_template_catalog_s08(self, *, select_id: str = "") -> None:
+        if not hasattr(self, "template_combo"):
+            return
+        previous = select_id or str(self.template_combo.currentData() or "")
+        templates, errors = self.custom_template_store.scan()
+        self.template_combo.blockSignals(True)
+        try:
+            self.template_combo.clear()
+            for definition in template_choices():
+                self.template_combo.addItem(definition.label, definition.template_id)
+                index = self.template_combo.count() - 1
+                self.template_combo.setItemData(index, definition.description, role=3)
+            if templates:
+                self.template_combo.insertSeparator(self.template_combo.count())
+                for template in templates:
+                    self.template_combo.addItem(f"Kustom • {template.label}", template.template_id)
+                    index = self.template_combo.count() - 1
+                    self.template_combo.setItemData(index, template.description, role=3)
+            index = self.template_combo.findData(previous)
+            if index < 0:
+                index = 0 if self.template_combo.count() else -1
+            self.template_combo.setCurrentIndex(index)
+        finally:
+            self.template_combo.blockSignals(False)
         self._template_changed_s07(self.template_combo.currentIndex())
+        if errors:
+            self._set_status(
+                f"{len(errors)} file template kustom rusak diabaikan. File valid tetap dimuat."
+            )
 
     def _template_changed_s07(self, index: int) -> None:
         if not hasattr(self, "template_combo") or index < 0:
             return
         description = self.template_combo.itemData(index, role=3)
         self.template_combo.setToolTip(str(description or ""))
+        template_id = str(self.template_combo.currentData() or "")
+        is_custom = is_custom_template_id(template_id)
+        if hasattr(self, "export_custom_template_btn"):
+            self.export_custom_template_btn.setEnabled(is_custom)
+            self.delete_custom_template_btn.setEnabled(is_custom)
 
     def _sync_template_combo(self) -> None:
         if not hasattr(self, "template_combo"):
             return
-        template_id = current_template_id(self.session.snapshot())
+        template_id = current_template_reference(self.session.snapshot())
         if not template_id:
             return
         index = self.template_combo.findData(template_id)
@@ -84,18 +159,122 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
             template_id = str(self.template_combo.currentData() or "")
             if not template_id:
                 raise ValueError("Pilih template terlebih dahulu.")
-            command = apply_template_command(self.session.snapshot(), template_id)
-            self.session.controller.dispatch(command)
+            snapshot = self.session.snapshot()
+            if is_custom_template_id(template_id):
+                template = self.custom_template_store.load(template_id)
+                commands = apply_custom_template_commands(snapshot, template)
+                label = template.label
+            else:
+                command = apply_template_command(snapshot, template_id)
+                commands = apply_builtin_template_commands(snapshot, command)
+                label = self.template_combo.currentText()
+            self.session.controller.dispatch(commands)
             doc = self.session.snapshot()
             first = next((layer.layer_id for layer in doc.layers if layer.origin == "template"), None)
             self.session.select_one(first)
             self._after_edit()
-            label = self.template_combo.currentText()
             self._set_status(
-                f"Template {label} diterapkan sebagai layer editable. Layer manual tetap dipertahankan."
+                f"Template {label} diterapkan sebagai layer editable. Layer manual lain tetap dipertahankan."
             )
         except Exception as exc:
             self._set_status(f"Terapkan template gagal: {exc}")
+
+    def _save_custom_template_s08(self) -> None:
+        name, accepted = QInputDialog.getText(
+            self,
+            "Simpan Template Kustom",
+            "Nama template:",
+            text="Template Kustom",
+        )
+        if not accepted:
+            return
+        description, accepted = QInputDialog.getMultiLineText(
+            self,
+            "Deskripsi Template",
+            "Deskripsi singkat (opsional):",
+            "",
+        )
+        if not accepted:
+            return
+        try:
+            template = self.custom_template_store.create_from_document(
+                self.session.snapshot(), name, description
+            )
+            self._reload_template_catalog_s08(select_id=template.template_id)
+            self._set_status(
+                f"Template kustom '{template.label}' disimpan portabel dengan {len(template.layers)} layer."
+            )
+        except Exception as exc:
+            self._set_status(f"Simpan template kustom gagal: {exc}")
+
+    def _import_custom_template_s08(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Impor Template Full Album",
+            "",
+            "Full Album Template (*.famtpl.json);;JSON (*.json)",
+        )
+        if not path:
+            return
+        try:
+            template = self.custom_template_store.import_template(path)
+            self._reload_template_catalog_s08(select_id=template.template_id)
+            self._set_status(f"Template kustom diimpor: {template.label}")
+        except Exception as exc:
+            self._set_status(f"Impor template gagal: {exc}")
+
+    def _export_custom_template_s08(self) -> None:
+        template_id = str(self.template_combo.currentData() or "")
+        if not is_custom_template_id(template_id):
+            self._set_status("Ekspor langsung hanya untuk template kustom. Simpan layout sebagai kustom dulu.")
+            return
+        try:
+            template = self.custom_template_store.load(template_id)
+        except Exception as exc:
+            self._set_status(f"Template kustom tidak dapat dibaca: {exc}")
+            return
+        safe_name = "_".join(template.label.split()) or "Template_Kustom"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Ekspor Template Full Album",
+            f"{safe_name}{CUSTOM_TEMPLATE_SUFFIX}",
+            "Full Album Template (*.famtpl.json)",
+        )
+        if not path:
+            return
+        try:
+            saved = self.custom_template_store.export_template(template_id, path)
+            self._set_status(f"Template diekspor: {saved.name}")
+        except Exception as exc:
+            self._set_status(f"Ekspor template gagal: {exc}")
+
+    def _delete_custom_template_s08(self) -> None:
+        template_id = str(self.template_combo.currentData() or "")
+        if not is_custom_template_id(template_id):
+            return
+        try:
+            template = self.custom_template_store.load(template_id)
+        except Exception as exc:
+            self._set_status(f"Template kustom tidak dapat dibaca: {exc}")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Hapus Template Kustom",
+            f"Hapus template '{template.label}' dari folder portable?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.custom_template_store.delete(template_id)
+            if current_custom_template_id(self.session.snapshot()) == template_id:
+                self.session.controller.dispatch(SetCustomTemplateMarker(""))
+                self._after_edit()
+            self._reload_template_catalog_s08()
+            self._set_status(f"Template kustom dihapus: {template.label}")
+        except Exception as exc:
+            self._set_status(f"Hapus template gagal: {exc}")
 
     def _add_spectrum_s05(self) -> None:
         try:
@@ -182,6 +361,10 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
             self.add_progress_btn,
             self.template_combo,
             self.apply_template_btn,
+            self.save_custom_template_btn,
+            self.import_custom_template_btn,
+            self.export_custom_template_btn,
+            self.delete_custom_template_btn,
             self.duplicate_btn,
             self.delete_btn,
             self.use_all_btn,
@@ -213,6 +396,7 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
         grid.addWidget(self.apply_template_btn, 0, 3)
 
         rows = [
+            [self.save_custom_template_btn, self.import_custom_template_btn, self.export_custom_template_btn, self.delete_custom_template_btn],
             [self.open_btn, self.save_btn, self.undo_btn, self.redo_btn],
             [self.add_text_btn, self.add_dynamic_title_btn, self.add_spectrum_btn, self.duplicate_btn],
             [self.add_cover_btn, self.add_vinyl_btn, self.add_playlist_visual_btn, self.add_progress_btn],
@@ -229,8 +413,8 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
                 grid.addWidget(widget, row, column)
 
         zoom_label = QLabel("Zoom", toolbar)
-        grid.addWidget(zoom_label, 6, 0)
-        grid.addWidget(self.zoom_slider, 6, 1, 1, 3)
+        grid.addWidget(zoom_label, 7, 0)
+        grid.addWidget(self.zoom_slider, 7, 1, 1, 3)
         grid.setColumnStretch(3, 1)
 
         root.insertWidget(0, toolbar)
