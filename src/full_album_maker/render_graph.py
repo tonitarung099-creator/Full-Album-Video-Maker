@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 import re
 from typing import Iterable
 
+from .album_visuals import format_duration_tick, normalize_visual_properties
 from .editor_models import Layer, ProjectDocument, TIMEBASE
 from .render_plan import RenderPlan, compile_render_plan
 from .spectrum_feature import dynamic_song_text, normalize_spectrum_properties
@@ -37,6 +39,13 @@ def _color(value: object, default: str = "#ffffff") -> str:
     if not re.fullmatch(r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?", text):
         raise RenderCompileError(f"Warna tidak valid: {text}")
     return "0x" + text[1:]
+
+
+def _rgb(value: object, default: str = "#ffffff") -> tuple[int, int, int]:
+    text = str(value or default).strip()
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?", text):
+        raise RenderCompileError(f"Warna tidak valid: {text}")
+    return tuple(int(text[index : index + 2], 16) for index in (1, 3, 5))
 
 
 def _font_size(layer: Layer, canvas_height: int) -> int:
@@ -109,12 +118,20 @@ def _ffmpeg_scale(value: str) -> str:
     return {"linear": "lin", "sqrt": "sqrt", "cbrt": "cbrt", "log": "log", "rlog": "rlog"}.get(value, value)
 
 
+def _clock_text(total_tick: int) -> str:
+    total = format_duration_tick(total_tick).replace(":", "\\:")
+    return (
+        "%{eif\\:floor(t/60)\\:d\\:2}\\:"
+        "%{eif\\:mod(floor(t)\\,60)\\:d\\:2} / " + total
+    )
+
+
 class FFmpegV2Compiler:
     """Compiler shared by final render and accurate preview.
 
-    S05 adds real audio-driven spectrum/waveform layers and dynamic song-title
-    layers. Preview Akurat calls this same compiler, so supported visuals never
-    use a separate approximation path for the frame that is shown as accurate.
+    S06 keeps the S05 audio visualizer path and adds album visuals: dynamic
+    covers, procedural vinyl, playlist panels, progress bars and duration text.
+    Preview Akurat still calls this exact compiler.
     """
 
     def __init__(self, ffmpeg: str) -> None:
@@ -154,47 +171,83 @@ class FFmpegV2Compiler:
         songs = document.song_map()
         resolved_by_layer = {item.layer_id: item for item in resolved.layers}
         media_input_index: dict[str, int] = {}
+        cover_input_index: dict[tuple[str, str], int] = {}
         next_input = 1
 
         active_layers: list[Layer] = []
         track_map = {track.track_id: track for track in document.tracks}
-        supported = {"background", "text", "song_title", "spectrum"}
+        supported = {
+            "background",
+            "text",
+            "song_title",
+            "spectrum",
+            "song_cover",
+            "vinyl",
+            "playlist_visual",
+            "progress",
+            "song_time",
+        }
         for layer in sorted(document.layers, key=lambda x: x.order):
             track = track_map[layer.track_id]
             if not layer.enabled or not track.enabled:
                 continue
             if layer.type not in supported:
-                raise RenderCompileError(f"Layer aktif belum didukung compiler S05: {layer.type}")
+                raise RenderCompileError(f"Layer aktif belum didukung compiler S06: {layer.type}")
             if layer.type == "spectrum":
                 try:
                     normalize_spectrum_properties(layer.properties)
                 except ValueError as exc:
                     raise RenderCompileError(str(exc)) from exc
+            if layer.type in {"song_cover", "vinyl", "playlist_visual", "progress", "song_time"}:
+                try:
+                    normalize_visual_properties(layer.type, layer.properties)
+                except ValueError as exc:
+                    raise RenderCompileError(str(exc)) from exc
             active_layers.append(layer)
-            if layer.type != "background":
-                continue
-            mode = str(layer.properties.get("mode", "asset" if layer.asset_refs else "solid"))
-            if mode == "solid":
-                continue
-            if not layer.asset_refs:
-                raise RenderCompileError("Background asset tidak memiliki referensi media.")
-            asset = assets.get(layer.asset_refs[0])
-            if asset is None or asset.kind not in {"image", "video"}:
-                raise RenderCompileError("Background harus merujuk image/video.")
-            if asset.asset_id in media_input_index:
-                continue
-            media_input_index[asset.asset_id] = next_input
-            next_input += 1
-            if asset.kind == "image":
-                args += ["-loop", "1", "-i", asset.locator]
-            else:
-                playback = str(layer.properties.get("playback", "loop"))
-                if playback not in {"loop", "freeze"}:
-                    raise RenderCompileError("playback background harus loop/freeze.")
-                if playback == "loop":
-                    args += ["-stream_loop", "-1", "-an", "-i", asset.locator]
+
+            if layer.type == "background":
+                mode = str(layer.properties.get("mode", "asset" if layer.asset_refs else "solid"))
+                if mode == "solid":
+                    continue
+                if not layer.asset_refs:
+                    raise RenderCompileError("Background asset tidak memiliki referensi media.")
+                asset = assets.get(layer.asset_refs[0])
+                if asset is None or asset.kind not in {"image", "video"}:
+                    raise RenderCompileError("Background harus merujuk image/video.")
+                if asset.asset_id in media_input_index:
+                    continue
+                media_input_index[asset.asset_id] = next_input
+                next_input += 1
+                if asset.kind == "image":
+                    args += ["-loop", "1", "-i", asset.locator]
                 else:
-                    args += ["-an", "-i", asset.locator]
+                    playback = str(layer.properties.get("playback", "loop"))
+                    if playback not in {"loop", "freeze"}:
+                        raise RenderCompileError("playback background harus loop/freeze.")
+                    if playback == "loop":
+                        args += ["-stream_loop", "-1", "-an", "-i", asset.locator]
+                    else:
+                        args += ["-an", "-i", asset.locator]
+
+        cover_layers = [layer for layer in active_layers if layer.type == "song_cover"]
+        for layer in cover_layers:
+            props = normalize_visual_properties("song_cover", layer.properties)
+            fallback_id = props["fallback_asset_id"]
+            if fallback_id and fallback_id not in assets:
+                raise RenderCompileError("Fallback cover tidak ditemukan di Media.")
+            used_ids: set[str] = set()
+            for event in plan.audio_events:
+                song = songs[event.song_id]
+                asset_id = song.cover_asset_id or fallback_id
+                if not asset_id or asset_id in used_ids:
+                    continue
+                asset = assets.get(asset_id)
+                if asset is None or asset.kind != "image":
+                    raise RenderCompileError("Cover dinamis harus merujuk asset image.")
+                used_ids.add(asset_id)
+                cover_input_index[(layer.layer_id, asset_id)] = next_input
+                next_input += 1
+                args += ["-loop", "1", "-i", asset.locator]
 
         spectrum_layers = [layer for layer in active_layers if layer.type == "spectrum"]
         needs_album_audio = include_audio or bool(spectrum_layers)
@@ -240,7 +293,6 @@ class FFmpegV2Compiler:
                 filters.append(f"[album_audio]asplit={len(branches)}{outputs}")
 
         stage = 1
-        spectrum_index = 0
         for layer in active_layers:
             resolved_layer = resolved_by_layer.get(layer.layer_id)
             intervals = [] if resolved_layer is None else [(x.start_tick, x.end_tick) for x in resolved_layer.intervals]
@@ -285,7 +337,6 @@ class FFmpegV2Compiler:
                     elif motion == "zoom_out":
                         motion_chain = f",zoompan=z='max(1,1.08-0.08*on/{frame_count})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={width}x{height}:fps={fps:g}"
                     elif motion in {"pan_left", "pan_right"}:
-                        direction = "1" if motion == "pan_right" else f"1-on/{frame_count}"
                         if motion == "pan_right":
                             x_expr = f"(iw-iw/zoom)*on/{frame_count}"
                         else:
@@ -300,6 +351,225 @@ class FFmpegV2Compiler:
                     f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=repeat:enable='{enable}'[{out}]"
                 )
                 current = out
+                continue
+
+            if layer.type == "song_cover":
+                props = normalize_visual_properties("song_cover", layer.properties)
+                fallback_id = props["fallback_asset_id"]
+                width, height = _layer_size(layer, document)
+                rotate = _rotation_chain(layer)
+                alpha = max(0.0, min(1.0, float(layer.opacity)))
+                grouped: dict[str, list[tuple[int, int]]] = defaultdict(list)
+                for event in plan.audio_events:
+                    song = songs[event.song_id]
+                    asset_id = song.cover_asset_id or fallback_id
+                    if not asset_id:
+                        continue
+                    grouped[asset_id].extend(_intersect_intervals(intervals, event.start_tick, event.end_tick))
+                for asset_id, cover_intervals in grouped.items():
+                    if not cover_intervals:
+                        continue
+                    index = cover_input_index[(layer.layer_id, asset_id)]
+                    fit = props["fit"]
+                    if fit == "fill":
+                        geometry = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
+                    else:
+                        geometry = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black@0"
+                    source_label = f"cover{stage}"
+                    out = f"v{stage}"
+                    stage += 1
+                    filters.append(
+                        f"[{index}:v]{geometry},format=rgba,colorchannelmixer=aa={alpha:.6f},"
+                        f"setpts=PTS-STARTPTS{rotate}[{source_label}]"
+                    )
+                    filters.append(
+                        f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
+                        f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=repeat:"
+                        f"enable='{_escape_enable(cover_intervals)}'[{out}]"
+                    )
+                    current = out
+                continue
+
+            if layer.type == "vinyl":
+                props = normalize_visual_properties("vinyl", layer.properties)
+                width, height = _layer_size(layer, document)
+                rotate = _rotation_chain(layer)
+                alpha = max(0.0, min(1.0, float(layer.opacity)))
+                base = _rgb(props["color"])
+                groove = _rgb(props["groove_color"])
+                center_rgb = _rgb(props["center_color"])
+                spin = props["spin_seconds"]
+                center_ratio = props["center_ratio"]
+                radius = "hypot(X-W/2,Y-H/2)"
+                dot = (
+                    f"lte(hypot(X-(W/2+cos(2*PI*T/{spin:.6f})*W*0.32),"
+                    f"Y-(H/2+sin(2*PI*T/{spin:.6f})*H*0.32)),min(W,H)*0.025)"
+                )
+                channel_exprs: list[str] = []
+                for base_value, groove_value, center_value in zip(base, groove, center_rgb):
+                    channel_exprs.append(
+                        f"if(lte({radius},min(W,H)*{center_ratio:.6f}),{center_value},"
+                        f"if({dot},{groove_value},if(lt(mod({radius},12),1.4),{groove_value},{base_value})))"
+                    )
+                source_label = f"vinyl{stage}"
+                out = f"v{stage}"
+                stage += 1
+                filters.append(
+                    f"nullsrc=s={width}x{height}:r={fps:g}:d={duration:.6f},format=rgba,"
+                    f"geq=r='{channel_exprs[0]}':g='{channel_exprs[1]}':b='{channel_exprs[2]}':"
+                    f"a='if(lte({radius},min(W,H)/2),255,0)',"
+                    f"colorchannelmixer=aa={alpha:.6f}{rotate}[{source_label}]"
+                )
+                filters.append(
+                    f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
+                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=pass:enable='{enable}'[{out}]"
+                )
+                current = out
+                continue
+
+            if layer.type == "playlist_visual":
+                props = normalize_visual_properties("playlist_visual", layer.properties)
+                width, height = _layer_size(layer, document)
+                rotate = _rotation_chain(layer)
+                alpha = max(0.0, min(1.0, float(layer.opacity)))
+                max_items = props["max_items"]
+                fontcolor = _color(props["color"])
+                active_color = _color(props["active_color"])
+                fontsize = props["font_size"]
+                row_height = height / max(1, max_items)
+                source_label = f"playlist{stage}"
+                out = f"v{stage}"
+                stage += 1
+                chain = (
+                    f"color=c=black@0:s={width}x{height}:r={fps:g}:d={duration:.6f},format=rgba,"
+                    f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{props['background_opacity']:.3f}:t=fill:enable='{enable}'"
+                )
+                events = list(plan.audio_events)
+                font_path = str(layer.properties.get("font_path", "") or "").strip()
+                font_prefix = f"fontfile='{_filter_path(Path(font_path))}':" if font_path else ""
+                for page_index in range(0, len(events), max_items):
+                    page = events[page_index : page_index + max_items]
+                    if not page:
+                        continue
+                    page_intervals = _intersect_intervals(intervals, page[0].start_tick, page[-1].end_tick)
+                    page_enable = _escape_enable(page_intervals)
+                    for row_index, event in enumerate(page):
+                        song = songs[event.song_id]
+                        asset = assets[song.asset_id]
+                        title = (song.display_title or Path(asset.locator).stem).strip()
+                        if props["show_artist"] and song.display_artist:
+                            title = f"{title} — {song.display_artist.strip()}"
+                        if props["numbered"]:
+                            title = f"{page_index + row_index + 1:02d}. {title}"
+                        title = title[:96]
+                        text_path = work / f"playlist-{layer.layer_id}-{page_index + row_index}.txt"
+                        text_path.write_text(title, encoding="utf-8")
+                        text_files.append(text_path)
+                        y = row_index * row_height
+                        common = (
+                            f"{font_prefix}textfile='{_filter_path(text_path)}':reload=0:x=10:"
+                            f"y='{y:.3f}+({row_height:.3f}-text_h)/2':fontsize={fontsize}"
+                        )
+                        chain += f",drawtext={common}:fontcolor={fontcolor}:enable='{page_enable}'"
+                        active_intervals = _intersect_intervals(intervals, event.start_tick, event.end_tick)
+                        chain += (
+                            f",drawtext={common}:fontcolor={active_color}:"
+                            f"enable='{_escape_enable(active_intervals)}'"
+                        )
+                chain += f",colorchannelmixer=aa={alpha:.6f}{rotate}[{source_label}]"
+                filters.append(chain)
+                filters.append(
+                    f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
+                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=pass:enable='{enable}'[{out}]"
+                )
+                current = out
+                continue
+
+            if layer.type == "progress":
+                props = normalize_visual_properties("progress", layer.properties)
+                width, height = _layer_size(layer, document)
+                rotate = _rotation_chain(layer)
+                alpha = max(0.0, min(1.0, float(layer.opacity)))
+                bg = _rgb(props["background_color"])
+                fill = _rgb(props["fill_color"])
+
+                def append_progress_source(source_duration: float, start_tick: int, source_enable: str) -> None:
+                    nonlocal current, stage
+                    if source_duration <= 0:
+                        return
+                    ratio = f"min(1,max(0,T/{source_duration:.6f}))"
+                    source_label = f"progress{stage}"
+                    out_label = f"v{stage}"
+                    stage += 1
+                    setpts = "" if start_tick <= 0 else f",setpts=PTS+{ticks_to_seconds(start_tick):.6f}/TB"
+                    filters.append(
+                        f"nullsrc=s={width}x{height}:r={fps:g}:d={source_duration:.6f},format=rgba,"
+                        f"geq=r='if(lte(X,W*({ratio})),{fill[0]},{bg[0]})':"
+                        f"g='if(lte(X,W*({ratio})),{fill[1]},{bg[1]})':"
+                        f"b='if(lte(X,W*({ratio})),{fill[2]},{bg[2]})':a='255',"
+                        f"colorchannelmixer=aa={alpha:.6f}{rotate}{setpts}[{source_label}]"
+                    )
+                    filters.append(
+                        f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
+                        f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=pass:"
+                        f"enable='{source_enable}'[{out_label}]"
+                    )
+                    current = out_label
+
+                if props["mode"] == "album":
+                    append_progress_source(duration, 0, enable)
+                else:
+                    for event in plan.audio_events:
+                        event_intervals = _intersect_intervals(intervals, event.start_tick, event.end_tick)
+                        append_progress_source(
+                            ticks_to_seconds(event.end_tick - event.start_tick),
+                            event.start_tick,
+                            _escape_enable(event_intervals),
+                        )
+                continue
+
+            if layer.type == "song_time":
+                props = normalize_visual_properties("song_time", layer.properties)
+                width, height = _layer_size(layer, document)
+                rotate = _rotation_chain(layer)
+                alpha = max(0.0, min(1.0, float(layer.opacity)))
+                fontcolor = _color(props["color"])
+                fontsize = props["font_size"]
+                font_path = str(layer.properties.get("font_path", "") or "").strip()
+                font_prefix = f"fontfile='{_filter_path(Path(font_path))}':" if font_path else ""
+
+                def append_time_source(source_tick: int, start_tick: int, source_enable: str) -> None:
+                    nonlocal current, stage
+                    source_duration = ticks_to_seconds(source_tick)
+                    if source_duration <= 0:
+                        return
+                    source_label = f"songtime{stage}"
+                    out_label = f"v{stage}"
+                    stage += 1
+                    setpts = "" if start_tick <= 0 else f",setpts=PTS+{ticks_to_seconds(start_tick):.6f}/TB"
+                    filters.append(
+                        f"color=c=black@0:s={width}x{height}:r={fps:g}:d={source_duration:.6f},format=rgba,"
+                        f"drawtext={font_prefix}text='{_clock_text(source_tick)}':x=0:y='(h-text_h)/2':"
+                        f"fontsize={fontsize}:fontcolor={fontcolor},colorchannelmixer=aa={alpha:.6f}"
+                        f"{rotate}{setpts}[{source_label}]"
+                    )
+                    filters.append(
+                        f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
+                        f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=pass:"
+                        f"enable='{source_enable}'[{out_label}]"
+                    )
+                    current = out_label
+
+                if props["mode"] == "album":
+                    append_time_source(resolved.duration_tick, 0, enable)
+                else:
+                    for event in plan.audio_events:
+                        event_intervals = _intersect_intervals(intervals, event.start_tick, event.end_tick)
+                        append_time_source(
+                            event.end_tick - event.start_tick,
+                            event.start_tick,
+                            _escape_enable(event_intervals),
+                        )
                 continue
 
             if layer.type == "spectrum":
@@ -336,7 +606,6 @@ class FFmpegV2Compiler:
                     f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=pass:enable='{enable}'[{out}]"
                 )
                 current = out
-                spectrum_index += 1
                 continue
 
             if abs(float(layer.transform.rotation)) > 0.0001:
