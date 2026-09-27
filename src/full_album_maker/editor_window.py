@@ -1,26 +1,44 @@
 from __future__ import annotations
 
+import threading
+from uuid import uuid4
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from .ai_editor import (
+    AIEditorAmbiguity,
+    AIEditorEnvelope,
+    AIEditorExecutor,
+    EDITOR_SYSTEM,
+    EDITOR_TOOLS,
+    EditorAIContextBuilder,
+    deterministic_action_id,
+)
 from .editor_commands import ReplaceDocument
+from .editor_controller import RevisionConflict
 from .editor_models import ProjectDocument
+from .gemini_agent import GeminiAgent
 from .legacy_sync_v2 import sync_legacy_media
 from .responsive_workspace import ResponsiveEditorWorkspace
 from .style import APP_STYLE
+from .template_system import template_choices
 from .ui import MainWindow as LegacyMainWindow
 
 
 class EditorMainWindow(LegacyMainWindow):
     """Main application shell with the explicit editor-v2 workspace.
 
-    The existing media panel and Gemini panel remain in place. The old center
-    TimelinePlan view is hidden, not patched, so legacy services can be retired
-    incrementally without runtime monkey patches for the new editor.
+    The existing media and Gemini panels remain. S09 routes Gemini through a
+    bounded v2 context and one transactional EditorController batch; legacy state
+    is never mutated by editor-v2 intents.
     """
 
     def __init__(self) -> None:
         self._editor_workspace_ready = False
         self._legacy_project_identity = None
+        self._ai_editor_executor: AIEditorExecutor | None = None
+        self._ai_pending: dict[str, tuple[str, int, str]] = {}
+        self._ai_context_builder = EditorAIContextBuilder()
         super().__init__()
         self.setMinimumSize(1080, 680)
         self.resize(1500, 860)
@@ -43,6 +61,139 @@ class EditorMainWindow(LegacyMainWindow):
         self._legacy_project_identity = id(self.project)
         self._editor_workspace_ready = True
         self._update_editor_title()
+        self.chat.appendPlainText(
+            "\n[EDITOR V2]\nGemini sekarang dapat mengedit layer, playlist, spectrum, cover, progress, dan template. "
+            "Semua aksi divalidasi lokal dan satu batch dapat di-Undo sekali.\n"
+        )
+
+    def _ensure_ai_executor(self) -> AIEditorExecutor:
+        controller = self.editor_workspace.session.controller
+        if self._ai_editor_executor is None or self._ai_editor_executor.controller is not controller:
+            self._ai_editor_executor = AIEditorExecutor(
+                controller,
+                template_store=self.editor_workspace.custom_template_store,
+            )
+        return self._ai_editor_executor
+
+    def _editor_template_ids(self) -> list[str]:
+        values = [item.template_id for item in template_choices()]
+        templates, _ = self.editor_workspace.custom_template_store.scan()
+        values.extend(item.template_id for item in templates)
+        return values
+
+    def ask_agent(self):
+        """Interpret against bounded editor-v2 context, never raw paths/media metadata."""
+        text = self.prompt.toPlainText().strip()
+        if not text or self.agent_busy:
+            return
+        if not getattr(self, "_editor_workspace_ready", False):
+            return super().ask_agent()
+
+        self.agent_busy = True
+        self.agent_send_btn.setEnabled(False)
+        self.prompt.clear()
+        self.chat.appendPlainText(f"\nANDA\n{text}\n")
+        model = self.model.currentData() or "gemini-3.8-flash"
+        snapshot = self.editor_workspace.session.snapshot()
+        request_id = uuid4().hex
+        self._ai_pending[request_id] = (snapshot.project_id, snapshot.revision, text)
+        while len(self._ai_pending) > 64:
+            self._ai_pending.pop(next(iter(self._ai_pending)))
+
+        context = self._ai_context_builder.build(
+            snapshot,
+            selected_layer_ids=self.editor_workspace.session.selected_layer_ids,
+            user_text=text,
+            template_ids=self._editor_template_ids(),
+        )
+
+        def work():
+            try:
+                if (
+                    self.agent is None
+                    or self.agent.model != model
+                    or getattr(self.agent, "tools", None) != EDITOR_TOOLS
+                ):
+                    self.agent = GeminiAgent(
+                        self.pool,
+                        model=model,
+                        tools=EDITOR_TOOLS,
+                        system_prompt=EDITOR_SYSTEM,
+                        history_limit=12,
+                    )
+                decision = self.agent.interpret(text, context)
+                self.bridge.agent_decision.emit(decision, request_id)
+            except Exception as exc:
+                self.bridge.error.emit(str(exc))
+                self.bridge.agent_done.emit()
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _handle_agent_decision(self, decision, request_id: str):
+        """Validate/commit editor-v2 actions atomically; render only after commit."""
+        try:
+            self.chat.appendPlainText(f"\nGEMINI\n{decision.message}\n")
+            pending = self._ai_pending.get(request_id)
+            if pending is None:
+                self.chat.appendPlainText(
+                    "APP\nRespons AI tidak dikenali atau terlalu lama; tidak ada perubahan diterapkan.\n"
+                )
+                return
+            project_id, expected_revision, original_text = pending
+            if not decision.actions:
+                return
+
+            action_id = deterministic_action_id(
+                project_id,
+                expected_revision,
+                request_id,
+                decision.actions,
+            )
+            envelope = AIEditorEnvelope(
+                action_id=action_id,
+                project_id=project_id,
+                expected_revision=expected_revision,
+                actions=tuple(decision.actions),
+            )
+            executor = self._ensure_ai_executor()
+            execution = executor.execute(envelope)
+
+            if execution.project_changed:
+                self.editor_workspace._after_edit()
+            if execution.saved_template_id:
+                self.editor_workspace._reload_template_catalog_s08(
+                    select_id=execution.saved_template_id
+                )
+            if execution.summary_text:
+                self.chat.appendPlainText(f"APP\n{execution.summary_text}\n")
+            if execution.render_requested:
+                self.chat.appendPlainText(
+                    "APP\nDesain sudah di-commit. Membuka dialog render karena Anda meminta render eksplisit.\n"
+                )
+                self.editor_workspace.render_project()
+        except AIEditorAmbiguity as exc:
+            lines = [f"• {item}" for item in exc.candidates]
+            self.chat.appendPlainText(
+                "APP\n"
+                + str(exc)
+                + "\n"
+                + "\n".join(lines)
+                + "\nTidak ada perubahan diterapkan. Sebutkan kandidat yang dipilih lalu kirim ulang.\n"
+            )
+            # Keep the original instruction visible so the user can add the chosen ID/name.
+            try:
+                self.prompt.setPlainText(original_text)
+            except Exception:
+                pass
+        except RevisionConflict as exc:
+            self.chat.appendPlainText(
+                f"APP\nPerintah tidak diterapkan karena state editor sudah berubah ({exc}). "
+                "Kirim ulang pada kondisi terbaru.\n"
+            )
+        except Exception as exc:
+            self._error(f"Perintah Gemini Editor V2 gagal diterapkan:\n\n{exc}")
+        finally:
+            self._agent_done()
 
     def refresh(self, *args, **kwargs):
         result = super().refresh(*args, **kwargs)
@@ -54,6 +205,7 @@ class EditorMainWindow(LegacyMainWindow):
                 document = ProjectDocument.new_empty("Editor Full Album")
                 document, _ = sync_legacy_media(document, self.project)
                 self.editor_workspace.set_document(document)
+                self._ai_editor_executor = None
                 self._legacy_project_identity = identity
                 self._on_editor_status("Proyek legacy baru dimuat ke editor v2 tanpa menimpa file sumber.")
             else:
