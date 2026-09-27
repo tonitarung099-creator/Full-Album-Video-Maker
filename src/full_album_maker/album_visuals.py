@@ -136,7 +136,7 @@ def make_progress_layer(track_id: str, order: int) -> Layer:
         name="Progress Lagu",
         order=order,
         time_binding=TimeBinding(kind="album"),
-        transform=Transform(x=0.06, y=0.89, width=0.88, height=0.016),
+        transform=Transform(x=0.06, y=0.89, width=0.88, height=0.02),
         properties=normalize_visual_properties("progress", {}),
         origin="manual",
     )
