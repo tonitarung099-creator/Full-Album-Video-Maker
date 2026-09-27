@@ -7,7 +7,7 @@ from .editor_workspace import EditorWorkspace
 
 
 class ResponsiveEditorWorkspace(EditorWorkspace):
-    """EditorWorkspace with a compact multi-row toolbar for laptop layouts.
+    """EditorWorkspace with compact controls for laptop layouts.
 
     The base workspace owns all actions/signals. This class only changes their
     presentation so the center editor can coexist with Media + AI panels on a
@@ -17,6 +17,7 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
     def __init__(self, document: ProjectDocument | None = None, parent=None) -> None:
         super().__init__(document, parent)
         self._rebuild_compact_toolbar()
+        self._rebuild_compact_playlist_controls()
 
     def _rebuild_compact_toolbar(self) -> None:
         root = self.layout()
@@ -59,8 +60,6 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
         grid.setHorizontalSpacing(4)
         grid.setVerticalSpacing(4)
 
-        # Four controls per row is deliberate: on Windows font metrics this keeps
-        # the editor center below ~720 px while retaining readable Indonesian text.
         rows = [
             [self.open_btn, self.save_btn, self.undo_btn, self.redo_btn],
             [self.add_text_btn, self.duplicate_btn, self.delete_btn, self.use_all_btn],
@@ -83,3 +82,45 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
 
         root.insertWidget(0, toolbar)
         self.compact_toolbar = toolbar
+
+    def _rebuild_compact_playlist_controls(self) -> None:
+        root = self.playlist.layout()
+        if root is None or root.count() < 3:
+            return
+
+        old_item = root.takeAt(root.count() - 1)
+        old_layout = old_item.layout()
+        if old_layout is None:
+            return
+
+        known = {
+            self.playlist.up_button,
+            self.playlist.down_button,
+            self.playlist.move_button,
+            self.playlist.remove_button,
+        }
+        while old_layout.count():
+            item = old_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None and widget not in known:
+                widget.deleteLater()
+
+        controls = QWidget(self.playlist)
+        controls.setObjectName("playlistControlsCompact")
+        controls.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        grid = QGridLayout(controls)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(4)
+        grid.setVerticalSpacing(4)
+
+        self.playlist.move_button.setText("Pindah ke…")
+        self.playlist.remove_button.setText("Hapus Playlist")
+        grid.addWidget(self.playlist.up_button, 0, 0)
+        grid.addWidget(self.playlist.down_button, 0, 1)
+        grid.addWidget(self.playlist.move_button, 1, 0)
+        grid.addWidget(self.playlist.remove_button, 1, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+
+        root.addWidget(controls)
+        self.compact_playlist_controls = controls
