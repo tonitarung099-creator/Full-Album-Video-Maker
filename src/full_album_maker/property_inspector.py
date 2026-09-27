@@ -125,6 +125,59 @@ class PropertyInspector(QWidget):
             self.amplitude_scale,
             self.spectrum_mirror,
         )
+
+        self.cover_fit = QComboBox()
+        self.cover_fit.addItem("Fill", "fill")
+        self.cover_fit.addItem("Fit", "fit")
+        self.form.addRow("Fit Cover", self.cover_fit)
+        self._cover_controls = (self.cover_fit,)
+
+        self.vinyl_spin = self._spin(1.0, 60.0, 0.5, 1)
+        self.vinyl_center_ratio = self._spin(0.05, 0.45, 0.01, 2)
+        self.vinyl_groove_color = QLineEdit()
+        self.vinyl_center_color = QLineEdit()
+        self.form.addRow("Putaran (detik)", self.vinyl_spin)
+        self.form.addRow("Label Tengah", self.vinyl_center_ratio)
+        self.form.addRow("Warna Groove", self.vinyl_groove_color)
+        self.form.addRow("Warna Label", self.vinyl_center_color)
+        self._vinyl_controls = (
+            self.vinyl_spin,
+            self.vinyl_center_ratio,
+            self.vinyl_groove_color,
+            self.vinyl_center_color,
+        )
+
+        self.playlist_max_items = self._spin(1, 30, 1, 0)
+        self.playlist_font_size = self._spin(8, 160, 1, 0)
+        self.playlist_active_color = QLineEdit()
+        self.playlist_numbered = QCheckBox("Tampilkan nomor")
+        self.playlist_show_artist = QCheckBox("Tampilkan artist")
+        self.playlist_bg_opacity = self._spin(0.0, 0.9, 0.05, 2)
+        self.form.addRow("Jumlah Lagu", self.playlist_max_items)
+        self.form.addRow("Font Playlist", self.playlist_font_size)
+        self.form.addRow("Warna Aktif", self.playlist_active_color)
+        self.form.addRow("Nomor", self.playlist_numbered)
+        self.form.addRow("Artist", self.playlist_show_artist)
+        self.form.addRow("Latar Playlist", self.playlist_bg_opacity)
+        self._playlist_controls = (
+            self.playlist_max_items,
+            self.playlist_font_size,
+            self.playlist_active_color,
+            self.playlist_numbered,
+            self.playlist_show_artist,
+            self.playlist_bg_opacity,
+        )
+
+        self.progress_mode = QComboBox()
+        self.progress_mode.addItem("Per Lagu", "song")
+        self.progress_mode.addItem("Seluruh Album", "album")
+        self.progress_fill_color = QLineEdit()
+        self.progress_bg_color = QLineEdit()
+        self.form.addRow("Mode Progress", self.progress_mode)
+        self.form.addRow("Warna Isi", self.progress_fill_color)
+        self.form.addRow("Warna Dasar", self.progress_bg_color)
+        self._progress_controls = (self.progress_mode, self.progress_fill_color, self.progress_bg_color)
+
         root.addStretch(1)
 
         for spin in (self.x, self.y, self.w, self.h, self.rotation):
@@ -144,6 +197,20 @@ class PropertyInspector(QWidget):
         self.frequency_scale.activated.connect(lambda: self._emit_property("frequency_scale", self.frequency_scale.currentData()))
         self.amplitude_scale.activated.connect(lambda: self._emit_property("amplitude_scale", self.amplitude_scale.currentData()))
         self.spectrum_mirror.toggled.connect(lambda value: self._emit_property("mirror", bool(value)))
+        self.cover_fit.activated.connect(lambda: self._emit_property("fit", self.cover_fit.currentData()))
+        self.vinyl_spin.editingFinished.connect(lambda: self._emit_property("spin_seconds", self.vinyl_spin.value()))
+        self.vinyl_center_ratio.editingFinished.connect(lambda: self._emit_property("center_ratio", self.vinyl_center_ratio.value()))
+        self.vinyl_groove_color.editingFinished.connect(lambda: self._emit_property("groove_color", self.vinyl_groove_color.text()))
+        self.vinyl_center_color.editingFinished.connect(lambda: self._emit_property("center_color", self.vinyl_center_color.text()))
+        self.playlist_max_items.editingFinished.connect(lambda: self._emit_property("max_items", int(self.playlist_max_items.value())))
+        self.playlist_font_size.editingFinished.connect(lambda: self._emit_property("font_size", int(self.playlist_font_size.value())))
+        self.playlist_active_color.editingFinished.connect(lambda: self._emit_property("active_color", self.playlist_active_color.text()))
+        self.playlist_numbered.toggled.connect(lambda value: self._emit_property("numbered", bool(value)))
+        self.playlist_show_artist.toggled.connect(lambda value: self._emit_property("show_artist", bool(value)))
+        self.playlist_bg_opacity.editingFinished.connect(lambda: self._emit_property("background_opacity", self.playlist_bg_opacity.value()))
+        self.progress_mode.activated.connect(lambda: self._emit_property("mode", self.progress_mode.currentData()))
+        self.progress_fill_color.editingFinished.connect(lambda: self._emit_property("fill_color", self.progress_fill_color.text()))
+        self.progress_bg_color.editingFinished.connect(lambda: self._emit_property("background_color", self.progress_bg_color.text()))
         self.set_layer(None)
 
     @staticmethod
@@ -174,6 +241,14 @@ class PropertyInspector(QWidget):
         resolved_duration_tick: int = TIMEBASE,
     ) -> None:
         self._updating = True
+        special_controls = (
+            *self._background_controls,
+            *self._spectrum_controls,
+            *self._cover_controls,
+            *self._vinyl_controls,
+            *self._playlist_controls,
+            *self._progress_controls,
+        )
         controls = [
             self.enabled,
             self.locked,
@@ -187,8 +262,7 @@ class PropertyInspector(QWidget):
             self.duration,
             self.text_value,
             self.color_value,
-            *self._background_controls,
-            *self._spectrum_controls,
+            *special_controls,
         ]
         blockers = [QSignalBlocker(control) for control in controls]
         try:
@@ -197,26 +271,49 @@ class PropertyInspector(QWidget):
             self.layer_name.setText(layer.name if layer else "Tidak ada layer dipilih")
             for control in controls:
                 control.setEnabled(layer is not None)
+            for control in special_controls:
+                self._set_field_visible(control, False)
             if layer is None:
-                for control in (*self._background_controls, *self._spectrum_controls):
-                    self._set_field_visible(control, False)
                 return
 
             is_background = layer.type == "background"
             is_text = layer.type == "text"
             is_title = layer.type == "song_title"
             is_spectrum = layer.type == "spectrum"
-            has_box_transform = is_background or is_spectrum
+            is_cover = layer.type == "song_cover"
+            is_vinyl = layer.type == "vinyl"
+            is_playlist = layer.type == "playlist_visual"
+            is_progress = layer.type == "progress"
+            is_time = layer.type == "song_time"
+            has_box_transform = layer.type in {
+                "background",
+                "spectrum",
+                "song_cover",
+                "vinyl",
+                "playlist_visual",
+                "progress",
+                "song_time",
+            }
             self.w.setEnabled(has_box_transform)
             self.h.setEnabled(has_box_transform)
             self.rotation.setEnabled(has_box_transform)
             self.text_value.setEnabled(is_text or is_title)
             self.text_label.setText("Template" if is_title else "Teks")
-            self.color_value.setEnabled(layer.type in {"text", "song_title", "background", "spectrum"})
+            self.color_value.setEnabled(layer.type in {"text", "song_title", "background", "spectrum", "vinyl", "playlist_visual", "song_time"})
             for control in self._background_controls:
                 self._set_field_visible(control, is_background)
             for control in self._spectrum_controls:
                 self._set_field_visible(control, is_spectrum)
+            for control in self._cover_controls:
+                self._set_field_visible(control, is_cover)
+            for control in self._vinyl_controls:
+                self._set_field_visible(control, is_vinyl)
+            for control in self._playlist_controls:
+                self._set_field_visible(control, is_playlist)
+            for control in self._progress_controls:
+                self._set_field_visible(control, is_progress or is_time)
+            self._set_field_visible(self.progress_fill_color, is_progress)
+            self._set_field_visible(self.progress_bg_color, is_progress)
 
             transform = layer.transform
             self.enabled.setChecked(layer.enabled)
@@ -251,6 +348,29 @@ class PropertyInspector(QWidget):
                 capability = SPECTRUM_CAPABILITIES.get(style)
                 self._set_field_visible(self.frequency_scale, bool(capability and capability.supports_frequency_scale))
                 self._set_field_visible(self.amplitude_scale, bool(capability and capability.supports_amplitude_scale))
+
+            if is_cover:
+                self._set_combo(self.cover_fit, str(layer.properties.get("fit", "fill")))
+
+            if is_vinyl:
+                self.vinyl_spin.setValue(float(layer.properties.get("spin_seconds", 8.0)))
+                self.vinyl_center_ratio.setValue(float(layer.properties.get("center_ratio", 0.18)))
+                self.vinyl_groove_color.setText(str(layer.properties.get("groove_color", "#2d2d2d")))
+                self.vinyl_center_color.setText(str(layer.properties.get("center_color", "#d9d9d9")))
+
+            if is_playlist:
+                self.playlist_max_items.setValue(int(layer.properties.get("max_items", 8)))
+                self.playlist_font_size.setValue(int(layer.properties.get("font_size", 30)))
+                self.playlist_active_color.setText(str(layer.properties.get("active_color", "#ffffff")))
+                self.playlist_numbered.setChecked(bool(layer.properties.get("numbered", True)))
+                self.playlist_show_artist.setChecked(bool(layer.properties.get("show_artist", False)))
+                self.playlist_bg_opacity.setValue(float(layer.properties.get("background_opacity", 0.28)))
+
+            if is_progress or is_time:
+                self._set_combo(self.progress_mode, str(layer.properties.get("mode", "song")))
+            if is_progress:
+                self.progress_fill_color.setText(str(layer.properties.get("fill_color", "#ffffff")))
+                self.progress_bg_color.setText(str(layer.properties.get("background_color", "#49515c")))
         finally:
             del blockers
             self._updating = False
@@ -258,7 +378,15 @@ class PropertyInspector(QWidget):
     def _emit_transform(self) -> None:
         if self._updating or not self._layer_id:
             return
-        supports_rotation = self._layer_type in {"background", "spectrum"}
+        supports_rotation = self._layer_type in {
+            "background",
+            "spectrum",
+            "song_cover",
+            "vinyl",
+            "playlist_visual",
+            "progress",
+            "song_time",
+        }
         current_rotation = self.rotation.value() if supports_rotation else 0.0
         self.transformEdited.emit(
             self._layer_id,

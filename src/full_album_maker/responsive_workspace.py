@@ -11,13 +11,14 @@ from .spectrum_feature import apply_spectrum_preset
 class ResponsiveEditorWorkspace(EditorWorkspace):
     """EditorWorkspace with compact controls for laptop layouts.
 
-    S05 keeps the compact S04 surface and adds manual Spectrum + Dynamic Title
-    actions without hiding Media/AI panels on 1366px screens.
+    S06 extends the S05 editor with cover/vinyl/playlist/progress controls while
+    keeping the same project state and command stack.
     """
 
     def __init__(self, document: ProjectDocument | None = None, parent=None) -> None:
         super().__init__(document, parent)
         self._install_s05_actions()
+        self._install_s06_actions()
         self._rebuild_compact_toolbar()
         self._rebuild_compact_playlist_controls()
 
@@ -27,6 +28,16 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
         self.add_spectrum_btn.clicked.connect(self._add_spectrum_s05)
         self.add_dynamic_title_btn.clicked.connect(self._add_dynamic_title_s05)
         self.inspector.spectrumPresetRequested.connect(self._apply_spectrum_preset_s05)
+
+    def _install_s06_actions(self) -> None:
+        self.add_cover_btn = QPushButton("+ Cover", self)
+        self.add_vinyl_btn = QPushButton("+ Vinyl", self)
+        self.add_playlist_visual_btn = QPushButton("+ Playlist", self)
+        self.add_progress_btn = QPushButton("+ Progress", self)
+        self.add_cover_btn.clicked.connect(self._add_cover_s06)
+        self.add_vinyl_btn.clicked.connect(self._add_vinyl_s06)
+        self.add_playlist_visual_btn.clicked.connect(self._add_playlist_visual_s06)
+        self.add_progress_btn.clicked.connect(self._add_progress_s06)
 
     def _add_spectrum_s05(self) -> None:
         try:
@@ -43,6 +54,38 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
             self._set_status("Judul lagu dinamis ditambahkan dan mengikuti metadata playlist aktif.")
         except Exception as exc:
             self._set_status(f"Tambah judul dinamis gagal: {exc}")
+
+    def _add_cover_s06(self) -> None:
+        try:
+            self.session.add_song_cover_layer()
+            self._after_edit()
+            self._set_status("Cover dinamis ditambahkan. Cover per lagu diprioritaskan, image pertama menjadi fallback.")
+        except Exception as exc:
+            self._set_status(f"Tambah cover gagal: {exc}")
+
+    def _add_vinyl_s06(self) -> None:
+        try:
+            self.session.add_vinyl_layer()
+            self._after_edit()
+            self._set_status("Vinyl/disc prosedural ditambahkan dan akan berputar saat render.")
+        except Exception as exc:
+            self._set_status(f"Tambah vinyl gagal: {exc}")
+
+    def _add_playlist_visual_s06(self) -> None:
+        try:
+            self.session.add_playlist_visual_layer()
+            self._after_edit()
+            self._set_status("Playlist visual ditambahkan. Halaman dan highlight mengikuti lagu aktif.")
+        except Exception as exc:
+            self._set_status(f"Tambah playlist visual gagal: {exc}")
+
+    def _add_progress_s06(self) -> None:
+        try:
+            self.session.add_progress_visuals()
+            self._after_edit()
+            self._set_status("Progress + durasi lagu ditambahkan sebagai satu transaksi undo.")
+        except Exception as exc:
+            self._set_status(f"Tambah progress gagal: {exc}")
 
     def _apply_spectrum_preset_s05(self, layer_id: str, preset_id: str) -> None:
         try:
@@ -75,6 +118,10 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
             self.add_text_btn,
             self.add_spectrum_btn,
             self.add_dynamic_title_btn,
+            self.add_cover_btn,
+            self.add_vinyl_btn,
+            self.add_playlist_visual_btn,
+            self.add_progress_btn,
             self.duplicate_btn,
             self.delete_btn,
             self.use_all_btn,
@@ -103,6 +150,7 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
         rows = [
             [self.open_btn, self.save_btn, self.undo_btn, self.redo_btn],
             [self.add_text_btn, self.add_dynamic_title_btn, self.add_spectrum_btn, self.duplicate_btn],
+            [self.add_cover_btn, self.add_vinyl_btn, self.add_playlist_visual_btn, self.add_progress_btn],
             [self.delete_btn, self.use_all_btn, self.auto_btn, self.play_btn],
             [self.preview_btn, self.render_btn, self.snap_check],
         ]
@@ -116,8 +164,8 @@ class ResponsiveEditorWorkspace(EditorWorkspace):
                 grid.addWidget(widget, row, column)
 
         zoom_label = QLabel("Zoom", toolbar)
-        grid.addWidget(zoom_label, 4, 0)
-        grid.addWidget(self.zoom_slider, 4, 1, 1, 3)
+        grid.addWidget(zoom_label, 5, 0)
+        grid.addWidget(self.zoom_slider, 5, 1, 1, 3)
         grid.setColumnStretch(3, 1)
 
         root.insertWidget(0, toolbar)
