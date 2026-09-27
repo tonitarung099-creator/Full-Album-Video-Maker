@@ -44,15 +44,15 @@ class PropertyInspector(QWidget):
         self.layer_name.setWordWrap(True)
         root.addWidget(self.layer_name)
 
-        form = QFormLayout()
-        form.setContentsMargins(0, 4, 0, 0)
-        form.setSpacing(5)
-        root.addLayout(form)
+        self.form = QFormLayout()
+        self.form.setContentsMargins(0, 4, 0, 0)
+        self.form.setSpacing(5)
+        root.addLayout(self.form)
 
         self.enabled = QCheckBox("Tampil")
         self.locked = QCheckBox("Kunci")
-        form.addRow("Status", self.enabled)
-        form.addRow("", self.locked)
+        self.form.addRow("Status", self.enabled)
+        self.form.addRow("", self.locked)
 
         self.x = self._spin(-2.0, 2.0, 0.01, 3)
         self.y = self._spin(-2.0, 2.0, 0.01, 3)
@@ -60,25 +60,41 @@ class PropertyInspector(QWidget):
         self.h = self._spin(0.02, 3.0, 0.01, 3)
         self.rotation = self._spin(-180.0, 180.0, 1.0, 1)
         self.opacity = self._spin(0.0, 1.0, 0.05, 2)
-        form.addRow("X", self.x)
-        form.addRow("Y", self.y)
-        form.addRow("Lebar", self.w)
-        form.addRow("Tinggi", self.h)
-        form.addRow("Rotasi", self.rotation)
-        form.addRow("Opacity", self.opacity)
+        self.form.addRow("X", self.x)
+        self.form.addRow("Y", self.y)
+        self.form.addRow("Lebar", self.w)
+        self.form.addRow("Tinggi", self.h)
+        self.form.addRow("Rotasi", self.rotation)
+        self.form.addRow("Opacity", self.opacity)
 
         self.start = self._spin(0.0, 24 * 3600.0, 0.1, 3)
         self.duration = self._spin(0.001, 24 * 3600.0, 0.1, 3)
-        form.addRow("Mulai (detik)", self.start)
-        form.addRow("Durasi (detik)", self.duration)
+        self.form.addRow("Mulai (detik)", self.start)
+        self.form.addRow("Durasi (detik)", self.duration)
 
         self.text_label = QLabel("Teks")
         self.text_value = QLineEdit()
         self.text_value.setPlaceholderText("Isi teks")
         self.color_value = QLineEdit()
         self.color_value.setPlaceholderText("#ffffff")
-        form.addRow(self.text_label, self.text_value)
-        form.addRow("Warna", self.color_value)
+        self.form.addRow(self.text_label, self.text_value)
+        self.form.addRow("Warna", self.color_value)
+
+        self.background_playback = QComboBox()
+        self.background_playback.addItem("Loop", "loop")
+        self.background_playback.addItem("Freeze frame", "freeze")
+        self.background_motion = QComboBox()
+        for label, value in (
+            ("Static", "static"),
+            ("Zoom In", "zoom_in"),
+            ("Zoom Out", "zoom_out"),
+            ("Pan Left", "pan_left"),
+            ("Pan Right", "pan_right"),
+        ):
+            self.background_motion.addItem(label, value)
+        self.form.addRow("Playback", self.background_playback)
+        self.form.addRow("Motion", self.background_motion)
+        self._background_controls = (self.background_playback, self.background_motion)
 
         self.spectrum_preset = QComboBox()
         self.spectrum_preset.addItem("Custom", "")
@@ -95,12 +111,12 @@ class PropertyInspector(QWidget):
         for label, value in (("Linear", "linear"), ("Sqrt", "sqrt"), ("Cbrt", "cbrt"), ("Log", "log")):
             self.amplitude_scale.addItem(label, value)
         self.spectrum_mirror = QCheckBox("Aktif")
-        form.addRow("Preset Spectrum", self.spectrum_preset)
-        form.addRow("Style Spectrum", self.spectrum_style)
-        form.addRow("Sensitivity", self.spectrum_gain)
-        form.addRow("Skala Frekuensi", self.frequency_scale)
-        form.addRow("Skala Amplitudo", self.amplitude_scale)
-        form.addRow("Mirror", self.spectrum_mirror)
+        self.form.addRow("Preset Spectrum", self.spectrum_preset)
+        self.form.addRow("Style Spectrum", self.spectrum_style)
+        self.form.addRow("Sensitivity", self.spectrum_gain)
+        self.form.addRow("Skala Frekuensi", self.frequency_scale)
+        self.form.addRow("Skala Amplitudo", self.amplitude_scale)
+        self.form.addRow("Mirror", self.spectrum_mirror)
         self._spectrum_controls = (
             self.spectrum_preset,
             self.spectrum_style,
@@ -120,6 +136,8 @@ class PropertyInspector(QWidget):
         self.locked.toggled.connect(self._emit_locked)
         self.text_value.editingFinished.connect(self._emit_text_property)
         self.color_value.editingFinished.connect(lambda: self._emit_property("color", self.color_value.text()))
+        self.background_playback.activated.connect(lambda: self._emit_property("playback", self.background_playback.currentData()))
+        self.background_motion.activated.connect(lambda: self._emit_property("motion", self.background_motion.currentData()))
         self.spectrum_preset.activated.connect(self._emit_spectrum_preset)
         self.spectrum_style.activated.connect(lambda: self._emit_property("style", self.spectrum_style.currentData()))
         self.spectrum_gain.editingFinished.connect(lambda: self._emit_property("gain", self.spectrum_gain.value()))
@@ -142,6 +160,12 @@ class PropertyInspector(QWidget):
         index = combo.findData(value)
         combo.setCurrentIndex(max(0, index))
 
+    def _set_field_visible(self, field: QWidget, visible: bool) -> None:
+        field.setVisible(visible)
+        label = self.form.labelForField(field)
+        if label is not None:
+            label.setVisible(visible)
+
     def set_layer(
         self,
         layer: Layer | None,
@@ -163,6 +187,7 @@ class PropertyInspector(QWidget):
             self.duration,
             self.text_value,
             self.color_value,
+            *self._background_controls,
             *self._spectrum_controls,
         ]
         blockers = [QSignalBlocker(control) for control in controls]
@@ -173,8 +198,8 @@ class PropertyInspector(QWidget):
             for control in controls:
                 control.setEnabled(layer is not None)
             if layer is None:
-                for control in self._spectrum_controls:
-                    control.setVisible(False)
+                for control in (*self._background_controls, *self._spectrum_controls):
+                    self._set_field_visible(control, False)
                 return
 
             is_background = layer.type == "background"
@@ -188,8 +213,10 @@ class PropertyInspector(QWidget):
             self.text_value.setEnabled(is_text or is_title)
             self.text_label.setText("Template" if is_title else "Teks")
             self.color_value.setEnabled(layer.type in {"text", "song_title", "background", "spectrum"})
+            for control in self._background_controls:
+                self._set_field_visible(control, is_background)
             for control in self._spectrum_controls:
-                control.setVisible(is_spectrum)
+                self._set_field_visible(control, is_spectrum)
 
             transform = layer.transform
             self.enabled.setChecked(layer.enabled)
@@ -209,6 +236,10 @@ class PropertyInspector(QWidget):
                 self.text_value.setText(str(layer.properties.get("text", "")))
             self.color_value.setText(str(layer.properties.get("color", "#ffffff")))
 
+            if is_background:
+                self._set_combo(self.background_playback, str(layer.properties.get("playback", "loop")))
+                self._set_combo(self.background_motion, str(layer.properties.get("motion", "static")))
+
             if is_spectrum:
                 self._set_combo(self.spectrum_preset, str(layer.properties.get("preset", "")))
                 self._set_combo(self.spectrum_style, str(layer.properties.get("style", "bars")))
@@ -218,8 +249,8 @@ class PropertyInspector(QWidget):
                 self.spectrum_mirror.setChecked(bool(layer.properties.get("mirror", False)))
                 style = str(layer.properties.get("style", "bars"))
                 capability = SPECTRUM_CAPABILITIES.get(style)
-                self.frequency_scale.setVisible(bool(capability and capability.supports_frequency_scale))
-                self.amplitude_scale.setVisible(bool(capability and capability.supports_amplitude_scale))
+                self._set_field_visible(self.frequency_scale, bool(capability and capability.supports_frequency_scale))
+                self._set_field_visible(self.amplitude_scale, bool(capability and capability.supports_amplitude_scale))
         finally:
             del blockers
             self._updating = False
