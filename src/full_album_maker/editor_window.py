@@ -4,8 +4,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .editor_commands import ReplaceDocument
 from .editor_models import ProjectDocument
-from .editor_workspace import EditorWorkspace
 from .legacy_sync_v2 import sync_legacy_media
+from .responsive_workspace import ResponsiveEditorWorkspace
 from .style import APP_STYLE
 from .ui import MainWindow as LegacyMainWindow
 
@@ -27,7 +27,7 @@ class EditorMainWindow(LegacyMainWindow):
 
         seed = ProjectDocument.new_empty("Editor Full Album")
         seed, _ = sync_legacy_media(seed, self.project)
-        self.editor_workspace = EditorWorkspace(seed, self.splitter)
+        self.editor_workspace = ResponsiveEditorWorkspace(seed, self.splitter)
         self.editor_workspace.statusMessage.connect(self._on_editor_status)
         self.editor_workspace.dirtyChanged.connect(lambda _: self._update_editor_title())
 
