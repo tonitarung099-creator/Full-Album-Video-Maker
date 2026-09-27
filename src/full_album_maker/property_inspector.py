@@ -28,6 +28,7 @@ class PropertyInspector(QWidget):
         self.setObjectName("propertyInspectorV2")
         self.setMinimumWidth(205)
         self._layer_id = ""
+        self._layer_type = ""
         self._updating = False
 
         root = QVBoxLayout(self)
@@ -121,11 +122,24 @@ class PropertyInspector(QWidget):
         blockers = [QSignalBlocker(control) for control in controls]
         try:
             self._layer_id = layer.layer_id if layer else ""
+            self._layer_type = layer.type if layer else ""
             self.layer_name.setText(layer.name if layer else "Tidak ada layer dipilih")
             for control in controls:
                 control.setEnabled(layer is not None)
             if layer is None:
                 return
+
+            # S04 guarantees resize/rotation parity only for background visual.
+            # Text can be positioned and styled, but the UI does not advertise
+            # transforms the FFmpeg compiler would reject.
+            is_background = layer.type == "background"
+            is_text = layer.type == "text"
+            self.w.setEnabled(is_background)
+            self.h.setEnabled(is_background)
+            self.rotation.setEnabled(is_background)
+            self.text_value.setEnabled(is_text)
+            self.color_value.setEnabled(layer.type in {"text", "background"})
+
             transform = layer.transform
             self.enabled.setChecked(layer.enabled)
             self.locked.setChecked(layer.locked)
@@ -147,6 +161,7 @@ class PropertyInspector(QWidget):
     def _emit_transform(self) -> None:
         if self._updating or not self._layer_id:
             return
+        current_rotation = self.rotation.value() if self._layer_type == "background" else 0.0
         self.transformEdited.emit(
             self._layer_id,
             Transform(
@@ -154,7 +169,7 @@ class PropertyInspector(QWidget):
                 y=self.y.value(),
                 width=self.w.value(),
                 height=self.h.value(),
-                rotation=self.rotation.value(),
+                rotation=current_rotation,
             ),
         )
 
