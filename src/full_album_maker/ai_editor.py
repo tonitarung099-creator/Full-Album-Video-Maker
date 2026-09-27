@@ -16,6 +16,7 @@ from .album_visuals import (
 )
 from .custom_template_builder import (
     CustomTemplateStore,
+    apply_builtin_template_commands,
     apply_custom_template_commands,
     is_custom_template_id,
 )
@@ -30,20 +31,11 @@ from .editor_commands import (
     SetLayerProperty,
 )
 from .editor_controller import EditorController, RevisionConflict
-from .editor_interaction_commands import (
-    SetLayerBindingPosition,
-    SetLayerDuration,
-    SetLayerEnabled,
-    SetLayerTransform,
-)
-from .editor_models import Layer, ProjectDocument, TIMEBASE, TimeBinding, Transform
+from .editor_interaction_commands import SetLayerEnabled, SetLayerTransform
+from .editor_models import Layer, ProjectDocument, TimeBinding, Transform
 from .playlist_commands import MoveSong, RemoveSong
-from .spectrum_feature import (
-    apply_spectrum_preset,
-    make_spectrum_layer,
-    normalize_spectrum_properties,
-)
-from .template_system import apply_template_command, TEMPLATES
+from .spectrum_feature import make_spectrum_layer, normalize_spectrum_properties
+from .template_system import TEMPLATES, apply_template_command
 
 
 EDITOR_SYSTEM = """Kamu adalah Gemini Intent Agent untuk Editor V2 Full Album Maker.
@@ -97,7 +89,7 @@ EDITOR_TOOLS: list[dict[str, Any]] = [
     {"name": "add_progress_bar", "description": "Tambah progress bar lagu/album.", "parameters": _obj({"mode": {"type": "string", "enum": ["song", "album"]}})},
     {"name": "apply_template", "description": "Terapkan template built-in/custom yang tersedia.", "parameters": _obj({"template_id": {"type": "string"}}, ("template_id",))},
     {"name": "save_template", "description": "Simpan layout saat ini sebagai template kustom lokal setelah commit desain.", "parameters": _obj({"label": {"type": "string"}, "description": {"type": "string"}}, ("label",))},
-    {"name": "move_song", "description": "Pindahkan song instance stabil berdasarkan ID.", "parameters": _obj({**_SONG_REF, "before_song_id": {"type": "string"}, "target_position": {"type": "integer"}})},
+    {"name": "move_song", "description": "Pindahkan song instance stabil berdasarkan ID. target_position adalah nomor playlist 1-based.", "parameters": _obj({**_SONG_REF, "before_song_id": {"type": "string"}, "target_position": {"type": "integer", "minimum": 1}})},
     {"name": "reorder_playlist", "description": "Set urutan playlist dengan semua song_id tepat satu kali.", "parameters": _obj({"song_ids": {"type": "array", "items": {"type": "string"}}}, ("song_ids",))},
     {"name": "remove_song", "description": "Hapus song instance dari playlist, bukan file media.", "parameters": _obj(_SONG_REF)},
     {"name": "set_background", "description": "Atur warna background canvas dalam #RRGGBB.", "parameters": _obj({"color": {"type": "string"}}, ("color",))},
@@ -184,16 +176,20 @@ def _layer_candidate(layer: Layer) -> dict[str, Any]:
 
 
 def _song_candidate(document: ProjectDocument, song) -> dict[str, Any]:
+    asset = document.asset_map().get(song.asset_id)
+    source_out = song.source_out_tick
+    if source_out is None:
+        source_out = asset.source_duration_tick if asset is not None else song.source_in_tick
     return {
         "song_id": song.song_id,
         "title": _redacted_text(song.display_title or "Tanpa judul"),
         "artist": _redacted_text(song.display_artist),
-        "duration_tick": max(0, song.source_out_tick - song.source_in_tick),
+        "duration_tick": max(0, int(source_out) - int(song.source_in_tick)),
     }
 
 
 class EditorAIContextBuilder:
-    """Build a bounded context without paths, keys, waveform/cache or raw metadata."""
+    """Build bounded editor context without paths, keys, waveform/cache or raw metadata."""
 
     def __init__(self, *, max_songs: int = 24, max_layers: int = 24) -> None:
         self.max_songs = max(4, min(50, int(max_songs)))
@@ -225,7 +221,6 @@ class EditorAIContextBuilder:
         ranked_songs = sorted(
             songs,
             key=lambda song: (
-                song.song_id not in selected,
                 -self._query_score(user_text, (song.display_title, song.display_artist)),
                 songs.index(song),
             ),
@@ -305,7 +300,8 @@ def _resolve_layer(document: ProjectDocument, args: dict[str, Any], *, types: se
     if not query:
         raise AIEditorError("Intent membutuhkan layer_id atau layer_query.")
     candidates = [
-        layer for layer in document.layers
+        layer
+        for layer in document.layers
         if (not types or layer.type in types)
         and query in _normalized(f"{layer.name} {layer.type}")
     ]
@@ -330,7 +326,8 @@ def _resolve_song(document: ProjectDocument, args: dict[str, Any]) -> Any:
     if not query:
         raise AIEditorError("Intent membutuhkan song_id atau song_query.")
     candidates = [
-        song for song in document.playlist.entries
+        song
+        for song in document.playlist.entries
         if query in _normalized(f"{song.display_title} {song.display_artist}")
     ]
     if not candidates:
@@ -433,7 +430,9 @@ class AIEditorExecutor:
 
         if name == "set_spectrum_style":
             layer = _resolve_layer(document, args, types={"spectrum"})
-            props = normalize_spectrum_properties({**layer.properties, "style": args["style"], "preset": ""})
+            props = normalize_spectrum_properties(
+                {**layer.properties, "style": args["style"], "preset": ""}
+            )
             return [SetLayerProperty(layer.layer_id, key, value) for key, value in props.items()]
 
         if name == "set_spectrum_range":
@@ -454,37 +453,72 @@ class AIEditorExecutor:
 
         if name == "set_playlist_style":
             layer = _resolve_layer(document, args, types={"playlist_visual"})
-            allowed = {"max_items", "font_size", "color", "active_color", "show_artist", "numbered", "background_opacity"}
-            merged = {**layer.properties, **{key: value for key, value in args.items() if key in allowed}}
+            allowed = {
+                "max_items",
+                "font_size",
+                "color",
+                "active_color",
+                "show_artist",
+                "numbered",
+                "background_opacity",
+            }
+            merged = {
+                **layer.properties,
+                **{key: value for key, value in args.items() if key in allowed},
+            }
             props = normalize_visual_properties("playlist_visual", merged)
             return [SetLayerProperty(layer.layer_id, key, value) for key, value in props.items()]
 
         if name == "add_cover":
-            fallback = next((asset.asset_id for asset in document.media if asset.kind == "image"), "")
-            return [AddLayer(make_song_cover_layer(track_id, order, fallback_asset_id=fallback))]
+            fallback = next(
+                (asset.asset_id for asset in document.media if asset.kind == "image"), ""
+            )
+            return [
+                AddLayer(
+                    make_song_cover_layer(
+                        track_id,
+                        order,
+                        fallback_asset_id=fallback,
+                    )
+                )
+            ]
 
         if name == "set_cover_style":
             layer = _resolve_layer(document, args, types={"song_cover"})
-            props = normalize_visual_properties("song_cover", {**layer.properties, "fit": args["fit"]})
+            props = normalize_visual_properties(
+                "song_cover",
+                {**layer.properties, "fit": args["fit"]},
+            )
             return [SetLayerProperty(layer.layer_id, key, value) for key, value in props.items()]
 
         if name == "add_progress_bar":
             layer = make_progress_layer(track_id, order)
-            props = normalize_visual_properties("progress", {**layer.properties, "mode": args.get("mode", "song")})
-            layer.properties = props
+            layer.properties = normalize_visual_properties(
+                "progress",
+                {**layer.properties, "mode": args.get("mode", "song")},
+            )
             return [AddLayer(layer)]
 
         if name == "apply_template":
             template_id = str(args.get("template_id", ""))
             if template_id in TEMPLATES:
-                return [apply_template_command(document, template_id)]
+                command = apply_template_command(document, template_id)
+                return list(apply_builtin_template_commands(document, command))
             if is_custom_template_id(template_id):
                 template = self.template_store.load(template_id)
                 return list(apply_custom_template_commands(document, template))
             raise AIEditorError("Template yang diminta tidak tersedia.")
 
         if name == "save_template":
-            side_effects.append(("save_template", {"label": str(args["label"]), "description": str(args.get("description", ""))}))
+            side_effects.append(
+                (
+                    "save_template",
+                    {
+                        "label": str(args["label"]),
+                        "description": str(args.get("description", "")),
+                    },
+                )
+            )
             return []
 
         if name == "move_song":
@@ -495,8 +529,8 @@ class AIEditorExecutor:
                 raise AIEditorError("before_song_id tidak ditemukan.")
             if target is not None:
                 target = int(target)
-                if not 0 <= target < len(document.playlist.entries):
-                    raise AIEditorError("target_position harus memakai indeks domain 0-based yang valid.")
+                if not 1 <= target <= len(document.playlist.entries):
+                    raise AIEditorError("target_position harus nomor playlist 1-based yang valid.")
             return [MoveSong(song.song_id, before_song_id=before, target_position=target)]
 
         if name == "reorder_playlist":
@@ -524,13 +558,17 @@ class AIEditorExecutor:
             raise AIEditorError("action_id wajib ada.")
         if envelope.action_id in self._seen:
             return AIEditorExecution(
-                messages=["Respons AI duplikat diabaikan; perubahan tidak diterapkan dua kali."],
+                messages=[
+                    "Respons AI duplikat diabaikan; perubahan tidak diterapkan dua kali."
+                ],
                 duplicate=True,
             )
 
         current = self.controller.snapshot()
         if envelope.project_id != current.project_id:
-            raise AIEditorError("Intent berasal dari project_id yang berbeda; tidak ada mutasi.")
+            raise AIEditorError(
+                "Intent berasal dari project_id yang berbeda; tidak ada mutasi."
+            )
         if envelope.expected_revision != current.revision:
             raise RevisionConflict(
                 f"Intent stale: expected revision {envelope.expected_revision}, current {current.revision}."
@@ -542,10 +580,16 @@ class AIEditorExecutor:
         messages: list[str] = []
         try:
             for action in envelope.actions:
-                action_commands = self._commands_for_action(simulation, action, side_effects)
+                action_commands = self._commands_for_action(
+                    simulation,
+                    action,
+                    side_effects,
+                )
                 if action_commands:
-                    # Validate every step on a private clone. Nothing touches the real controller yet.
-                    simulation, _ = EditorController._apply_transaction(simulation, action_commands)
+                    simulation, _ = EditorController._apply_transaction(
+                        simulation,
+                        action_commands,
+                    )
                     commands.extend(action_commands)
                 messages.append(f"✓ Intent tervalidasi: {action.name}")
         except AIEditorAmbiguity:
@@ -555,10 +599,16 @@ class AIEditorExecutor:
 
         changed = bool(commands)
         if commands:
-            self.controller.dispatch(commands, expected_revision=envelope.expected_revision)
+            self.controller.dispatch(
+                commands,
+                expected_revision=envelope.expected_revision,
+            )
         self._remember(envelope.action_id)
 
-        result = AIEditorExecution(messages=messages, project_changed=changed)
+        result = AIEditorExecution(
+            messages=messages,
+            project_changed=changed,
+        )
         final_snapshot = self.controller.snapshot()
         for kind, args in side_effects:
             if kind == "render_project":
@@ -572,8 +622,12 @@ class AIEditorExecutor:
                         args.get("description", ""),
                     )
                     result.saved_template_id = template.template_id
-                    result.messages.append(f"✓ Template kustom tersimpan: {template.label}")
+                    result.messages.append(
+                        f"✓ Template kustom tersimpan: {template.label}"
+                    )
                 except Exception as exc:
-                    result.side_effect_error = f"Desain diterapkan, tetapi simpan template gagal: {exc}"
+                    result.side_effect_error = (
+                        f"Desain diterapkan, tetapi simpan template gagal: {exc}"
+                    )
                     result.messages.append(result.side_effect_error)
         return result
