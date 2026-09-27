@@ -21,6 +21,7 @@ from .editor_interaction_commands import (
     SetTrackLocked,
 )
 from .editor_models import Layer, ProjectDocument, TIMEBASE, TimeBinding, Transform
+from .spectrum_feature import make_dynamic_title_layer, make_spectrum_layer
 from .timeline_resolver import ResolvedTimeline, TimelineResolver
 
 
@@ -83,8 +84,6 @@ class EditorSession:
     def set_document(self, document: ProjectDocument, *, mark_saved: bool = True) -> None:
         self.controller = EditorController(document)
         if not mark_saved:
-            # A freshly constructed controller is clean by definition; callers
-            # wanting a dirty replacement should make the next edit explicitly.
             pass
         self.selected_layer_ids = []
         self.playhead_tick = 0
@@ -150,24 +149,42 @@ class EditorSession:
         self.selected_layer_ids = [cmd.new_layer_id for cmd in commands if cmd.new_layer_id]
         return self._after_mutation()
 
-    def add_text_layer(self, text: str = "Teks Baru") -> ProjectDocument:
+    def _visual_track_and_order(self) -> tuple[str, int]:
         doc = self.snapshot()
         track = next((item for item in doc.tracks if item.kind == "visual" and item.enabled), None)
         if track is None:
             track = next((item for item in doc.tracks if item.kind == "visual"), None)
         if track is None:
             raise ValueError("Track visual tidak tersedia.")
+        return track.track_id, max([item.order for item in doc.layers], default=-1) + 1
+
+    def add_text_layer(self, text: str = "Teks Baru") -> ProjectDocument:
+        track_id, order = self._visual_track_and_order()
         duration = max(TIMEBASE, self.album_end_tick())
         layer = Layer(
-            track_id=track.track_id,
+            track_id=track_id,
             type="text",
             name="Teks",
-            order=max([item.order for item in doc.layers], default=-1) + 1,
+            order=order,
             time_binding=TimeBinding(kind="absolute", start_tick=self.playhead_tick, duration_tick=duration),
             transform=Transform(x=0.08, y=0.08, width=0.84, height=0.16),
             properties={"text": str(text), "font_size": 64, "color": "#ffffff"},
             origin="manual",
         )
+        self.controller.dispatch(AddLayer(layer))
+        self.selected_layer_ids = [layer.layer_id]
+        return self._after_mutation()
+
+    def add_spectrum_layer(self, preset_id: str = "neon_bars") -> ProjectDocument:
+        track_id, order = self._visual_track_and_order()
+        layer = make_spectrum_layer(track_id, order, preset_id=preset_id)
+        self.controller.dispatch(AddLayer(layer))
+        self.selected_layer_ids = [layer.layer_id]
+        return self._after_mutation()
+
+    def add_dynamic_title_layer(self) -> ProjectDocument:
+        track_id, order = self._visual_track_and_order()
+        layer = make_dynamic_title_layer(track_id, order)
         self.controller.dispatch(AddLayer(layer))
         self.selected_layer_ids = [layer.layer_id]
         return self._after_mutation()
