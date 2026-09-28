@@ -140,9 +140,12 @@ jobs:
               throw "Gate S12 gagal mengisolasi FFmpeg global."
             }
 
-            & $app.FullName --portable-smoke
-            if ($LASTEXITCODE -ne 0) {
-              throw "Portable smoke keluar dengan kode $LASTEXITCODE."
+            # Full Album Maker is a Windows GUI subsystem EXE. PowerShell's call
+            # operator does not reliably populate $LASTEXITCODE for that process,
+            # so explicitly wait and read the process ExitCode.
+            $smokeProcess = Start-Process -FilePath $app.FullName -ArgumentList "--portable-smoke" -Wait -PassThru
+            if ($smokeProcess.ExitCode -ne 0) {
+              throw "Portable smoke keluar dengan kode $($smokeProcess.ExitCode)."
             }
           }
           finally {
