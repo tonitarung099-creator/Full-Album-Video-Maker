@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import heapq
 from dataclasses import dataclass, field
 
 from .editor_models import Layer, ProjectDocument
@@ -147,49 +148,51 @@ class TimelineResolver:
         indexed.sort(key=lambda item: (item[1].start_tick, item[0]))
         songs = [item[1] for item in indexed]
 
+        # S12: sweep active intervals instead of rescanning songs[:index] for every
+        # entry. The old implementation was O(n^2) on long Free Timeline projects.
+        # Heap entries are (end_tick, stable_index, ResolvedSong) so equal end times
+        # never require comparing dataclass instances.
+        active: list[tuple[int, int, ResolvedSong]] = []
         for index, current in enumerate(songs):
+            while active and active[0][0] <= current.start_tick:
+                heapq.heappop(active)
+
             current_song = song_map[current.song_id]
             fade = int(current_song.crossfade_in_tick)
-            active_prior = [
-                prior
-                for prior in songs[:index]
-                if prior.end_tick > current.start_tick
-            ]
+            active_prior = [item[2] for item in active]
             if len(active_prior) > 1:
                 errors.append(
                     f"Audio: overlap lagu {current.song_id} ambigu/triple; "
                     "Free Timeline hanya menerima satu pasangan crossfade pada satu waktu."
                 )
-                continue
-            if not active_prior:
+            elif not active_prior:
                 if fade > 0:
                     errors.append(
                         f"Audio: crossfade lagu {current.song_id} disetel {fade} tick "
                         "tetapi tidak ada overlap sebelumnya."
                     )
-                continue
+            else:
+                prior = active_prior[0]
+                overlap = prior.end_tick - current.start_tick
+                prior_duration = prior.end_tick - prior.start_tick
+                current_duration = current.end_tick - current.start_tick
+                if fade <= 0:
+                    errors.append(
+                        f"Audio: overlap {overlap} tick menuju lagu {current.song_id} "
+                        "belum memiliki crossfade terdefinisi."
+                    )
+                elif fade != overlap:
+                    errors.append(
+                        f"Audio: overlap lagu {current.song_id} adalah {overlap} tick, "
+                        f"tetapi crossfade_in_tick={fade}."
+                    )
+                elif fade >= prior_duration or fade >= current_duration:
+                    errors.append(
+                        f"Audio: crossfade lagu {current.song_id} harus lebih pendek "
+                        "dari kedua lagu yang ditransisikan."
+                    )
 
-            prior = active_prior[0]
-            overlap = prior.end_tick - current.start_tick
-            prior_duration = prior.end_tick - prior.start_tick
-            current_duration = current.end_tick - current.start_tick
-            if fade <= 0:
-                errors.append(
-                    f"Audio: overlap {overlap} tick menuju lagu {current.song_id} "
-                    "belum memiliki crossfade terdefinisi."
-                )
-                continue
-            if fade != overlap:
-                errors.append(
-                    f"Audio: overlap lagu {current.song_id} adalah {overlap} tick, "
-                    f"tetapi crossfade_in_tick={fade}."
-                )
-                continue
-            if fade >= prior_duration or fade >= current_duration:
-                errors.append(
-                    f"Audio: crossfade lagu {current.song_id} harus lebih pendek "
-                    "dari kedua lagu yang ditransisikan."
-                )
+            heapq.heappush(active, (current.end_tick, index, current))
 
         duration = max((item.end_tick for item in songs), default=0)
         return songs, duration
