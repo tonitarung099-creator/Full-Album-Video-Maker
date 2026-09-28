@@ -9,6 +9,14 @@ function Assert-NativeSuccess {
     }
 }
 
+$Version = python -c "import sys; sys.path.insert(0, 'src'); import full_album_maker; print(full_album_maker.__version__)"
+Assert-NativeSuccess "Baca versi aplikasi"
+$Version = $Version.Trim()
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Versi release harus semantic version stabil, contoh 1.0.0. Ditemukan: $Version"
+}
+$ReleaseZipName = "Full-Album-Maker-v$Version-Windows-Portable.zip"
+
 # Keep the local release path aligned with CI. A developer running this script
 # should get the same dependency family, FFmpeg digest, font fallback, capability
 # report, and extracted-ZIP smoke contract as the GitHub Actions artifact.
@@ -88,7 +96,7 @@ New-Item -ItemType Directory -Force "$App\output" | Out-Null
 python "$Root\build\write_release_capabilities.py" --root "$App"
 Assert-NativeSuccess "Tulis CAPABILITIES.json"
 
-$Zip = "$Root\Full-Album-Maker-Windows-Portable.zip"
+$Zip = "$Root\$ReleaseZipName"
 if (Test-Path $Zip) { Remove-Item $Zip -Force }
 Compress-Archive -Path "$App" -DestinationPath $Zip
 if (-not (Test-Path $Zip)) { throw "Portable ZIP tidak berhasil dibuat." }
@@ -139,7 +147,11 @@ if (-not $Smoke.ok -or $Smoke.api_key_present) {
 if ($Smoke.output_streams -notcontains "audio" -or $Smoke.output_streams -notcontains "video") {
     throw "Portable smoke output belum terverifikasi audio+video."
 }
+if ($Smoke.gui_title -notlike "*v$Version*") {
+    throw "GUI portable tidak menampilkan versi release $Version. Title: $($Smoke.gui_title)"
+}
 
+Write-Host "Full Album Maker v$Version"
 Write-Host "Portable ZIP siap di: $Zip"
 Write-Host "SHA-256: $((Get-FileHash $Zip -Algorithm SHA256).Hash.ToLowerInvariant())"
 Write-Host "Smoke portable: OK ($($Smoke.output_duration_seconds)s; $($Smoke.output_bytes) bytes; $($Smoke.output_streams -join ', '))"
