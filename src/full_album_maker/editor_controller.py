@@ -18,13 +18,21 @@ class HistoryTransaction:
 
 
 class EditorController:
-    def __init__(self, document: ProjectDocument, *, history_limit: int = 100) -> None:
+    def __init__(
+        self,
+        document: ProjectDocument,
+        *,
+        history_limit: int = 100,
+        mark_saved: bool = True,
+    ) -> None:
         document.validate()
         self._document = document.clone()
         self._history: list[HistoryTransaction] = []
         self._redo: list[HistoryTransaction] = []
         self._history_limit = max(1, int(history_limit))
-        self._saved_signature = self._document.content_signature()
+        self._saved_signature = (
+            self._document.content_signature() if mark_saved else None
+        )
 
     @property
     def revision(self) -> int:
@@ -82,7 +90,6 @@ class EditorController:
         updated, redo_inverses = self._apply_transaction(self._document, entry.inverse_commands)
         updated.revision = self._document.revision + 1
         self._document = updated
-        # redo_inverses are the original semantic operation generated from current state.
         self._redo.append(HistoryTransaction(redo_inverses, entry.inverse_commands))
         return self.snapshot()
 
