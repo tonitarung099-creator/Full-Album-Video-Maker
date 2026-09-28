@@ -92,6 +92,7 @@ def _cover(tmp_path: Path) -> Path:
 
 
 def _document(tmp_path: Path, *, white: bool = False) -> ProjectDocument:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     doc = ProjectDocument.new_empty("S10")
     doc.canvas.width = 320
     doc.canvas.height = 180
@@ -138,9 +139,15 @@ def test_s10_has_exactly_ten_public_templates_and_required_spectrum_presets(
 
 
 def test_overlay_presets_are_bounded_and_reject_unknown_or_unbounded_values():
-    assert {"vignette", "bokeh", "light_leak", "particles", "film_grain", "vhs_noise", "glow"}.issubset(
-        EFFECT_PRESETS
-    )
+    assert {
+        "vignette",
+        "bokeh",
+        "light_leak",
+        "particles",
+        "film_grain",
+        "vhs_noise",
+        "glow",
+    }.issubset(EFFECT_PRESETS)
     for preset in EFFECT_PRESETS:
         props = make_effect_properties(preset, seed=123)
         assert props["effect_preset"] == preset
@@ -151,9 +158,13 @@ def test_overlay_presets_are_bounded_and_reject_unknown_or_unbounded_values():
     with pytest.raises(ValueError, match="belum didukung"):
         normalize_effect_properties({"effect_preset": "circular_fake"})
     with pytest.raises(ValueError, match="1..12"):
-        normalize_effect_properties({"effect_preset": "particles", "count": 5000})
+        normalize_effect_properties(
+            {"effect_preset": "particles", "count": 5000}
+        )
     with pytest.raises(ValueError, match="0..4"):
-        normalize_effect_properties({"effect_preset": "particles", "speed": 999})
+        normalize_effect_properties(
+            {"effect_preset": "particles", "speed": 999}
+        )
 
 
 def test_circular_spectrum_is_explicitly_deferred_not_faked():
@@ -168,8 +179,8 @@ def test_effect_alpha_does_not_turn_bright_canvas_into_black_box(
     preset: str,
 ):
     ffmpeg = _ffmpeg()
-    doc = _document(tmp_path / preset, white=True)
-    Path(tmp_path / preset).mkdir(parents=True, exist_ok=True)
+    case = tmp_path / preset
+    doc = _document(case, white=True)
     track = next(item for item in doc.tracks if item.kind == "visual")
     props = make_effect_properties(
         preset,
@@ -192,12 +203,12 @@ def test_effect_alpha_does_not_turn_bright_canvas_into_black_box(
             origin="manual",
         )
     )
-    output = tmp_path / f"{preset}.png"
+    output = case / f"{preset}.png"
     compiled = FFmpegV2Compiler(ffmpeg).compile_frame(
         doc,
         seconds_to_tick(0.25),
         output,
-        tmp_path / f"work-{preset}",
+        case / f"work-{preset}",
     )
     completed = subprocess.run(
         compiled.args,
@@ -208,8 +219,6 @@ def test_effect_alpha_does_not_turn_bright_canvas_into_black_box(
     assert output.exists() and output.stat().st_size > 0
     with Image.open(output).convert("RGB") as image:
         mean = ImageStat.Stat(image).mean
-        # A bad alpha pipeline commonly creates an opaque black rectangle. The
-        # untouched white canvas must remain broadly bright after a translucent FX.
         assert sum(mean) / 3 > 120
         extrema = image.getextrema()
         assert any(high - low > 3 for low, high in extrema)
@@ -222,7 +231,6 @@ def test_every_template_thumbnail_is_real_compiler_render_and_source_is_unchange
 ):
     ffmpeg = _ffmpeg()
     case = tmp_path / template_id
-    case.mkdir(parents=True, exist_ok=True)
     doc = _document(case)
     before = doc.content_signature()
     output = case / f"{template_id}-thumbnail.png"
@@ -240,7 +248,9 @@ def test_every_template_thumbnail_is_real_compiler_render_and_source_is_unchange
         assert image.format == "PNG"
 
 
-def test_effect_layer_properties_remain_serializable_and_editable(tmp_path: Path):
+def test_effect_layer_properties_remain_serializable_and_editable(
+    tmp_path: Path,
+):
     doc = _document(tmp_path)
     layers = build_template_layers(doc, "neon_spectrum")
     particles = next(
