@@ -42,6 +42,25 @@ def output_dir() -> Path:
     return path
 
 
+def configure_bundled_fontconfig() -> str:
+    """Prefer the portable Noto Sans bundle when it is actually present.
+
+    Source checkouts that have not downloaded the binary font keep their normal
+    system fontconfig behavior. The Windows release workflow places the pinned
+    font beside fonts.conf before tests/builds, making portable drawtext output
+    independent from user-installed fonts for default/fallback text.
+    """
+
+    folder = asset_path("fonts")
+    config = folder / "fonts.conf"
+    font = folder / "NotoSans.ttf"
+    if not config.exists() or not font.exists():
+        return ""
+    os.environ.setdefault("FONTCONFIG_FILE", str(config))
+    os.environ.setdefault("FONTCONFIG_PATH", str(folder))
+    return str(config)
+
+
 def _find_tool(name: str) -> str:
     exe = f"{name}.exe" if os.name == "nt" else name
     bundled = app_root() / "tools" / "ffmpeg" / exe
@@ -51,6 +70,7 @@ def _find_tool(name: str) -> str:
 
 
 def ffmpeg_path() -> str:
+    configure_bundled_fontconfig()
     return _find_tool("ffmpeg")
 
 
