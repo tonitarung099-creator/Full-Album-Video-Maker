@@ -26,8 +26,9 @@ def _externalize_large_filter_graph(
     """Keep long FFmpeg graphs out of the Windows process command line.
 
     A 200-song project can easily generate tens of thousands of filter characters.
-    FFmpeg still receives the exact same graph, but through -filter_complex_script.
-    This preserves S01-S11 semantics while materially lowering CreateProcess risk.
+    FFmpeg still receives the exact same graph through the documented option-file
+    syntax `-/filter_complex <file>`. This preserves S01-S11 semantics while
+    materially lowering CreateProcess command-line risk.
     """
 
     args = list(compiled.args)
@@ -50,7 +51,7 @@ def _externalize_large_filter_graph(
     script = work / "filter-complex-s12.txt"
     script.write_text(graph + "\n", encoding="utf-8")
     args[option_index : option_index + 2] = [
-        "-filter_complex_script",
+        "-/filter_complex",
         str(script),
     ]
     return CompiledFFmpeg(
