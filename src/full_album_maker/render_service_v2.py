@@ -101,6 +101,24 @@ def _write_chapters(path: Path, document: ProjectDocument, plan: RenderPlan) -> 
     atomic_write_text(path, "\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _normalized_mp4_destination(destination: str | Path) -> Path:
+    """Return the canonical MP4 output path used by the v2 renderer.
+
+    Native save dialogs do not consistently append the selected filter suffix on
+    every Windows configuration. The renderer only publishes MP4, so a missing
+    extension is normalized here instead of relying on UI behavior. An explicit
+    non-MP4 suffix is rejected to avoid silently writing MP4 bytes under a
+    misleading file name.
+    """
+
+    path = Path(destination)
+    if not path.suffix:
+        path = path.with_suffix(".mp4")
+    elif path.suffix.lower() != ".mp4":
+        raise RenderErrorV2("Output Editor V2 harus menggunakan ekstensi .mp4.")
+    return path.resolve()
+
+
 class EditorRenderService:
     def __init__(self, ffmpeg: str | None = None, runner: FFmpegProcessRunner | None = None) -> None:
         self.ffmpeg = ffmpeg or ffmpeg_path()
@@ -119,7 +137,7 @@ class EditorRenderService:
         snapshot = document.clone()
         snapshot.validate()
         destination = destination or str(output_dir() / "FULL_ALBUM_FINAL.mp4")
-        dest = Path(destination).resolve()
+        dest = _normalized_mp4_destination(destination)
         active_sources = {
             Path(asset.locator).resolve()
             for asset in snapshot.media
