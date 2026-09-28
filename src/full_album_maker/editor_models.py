@@ -146,6 +146,7 @@ class SongInstance:
     gain: float = 1.0
     enabled: bool = True
     free_start_tick: int | None = None
+    crossfade_in_tick: int = 0
 
     def validate(self) -> None:
         _uuid(self.song_id, "song_id")
@@ -160,6 +161,7 @@ class SongInstance:
             raise ProjectSchemaError("enabled lagu tidak valid.")
         if self.free_start_tick is not None:
             self.free_start_tick = _int(self.free_start_tick, "free_start_tick")
+        self.crossfade_in_tick = _int(self.crossfade_in_tick, "crossfade_in_tick")
         if self.cover_asset_id is not None:
             _uuid(self.cover_asset_id, "cover_asset_id")
         if self.visual_asset_id is not None:
@@ -181,6 +183,7 @@ class SongInstance:
             gain=_float(data.get("gain", 1.0), "gain"),
             enabled=data.get("enabled", True),
             free_start_tick=None if data.get("free_start_tick") is None else _int(data.get("free_start_tick"), "free_start_tick"),
+            crossfade_in_tick=_int(data.get("crossfade_in_tick", 0), "crossfade_in_tick"),
         )
         item.validate()
         return item
@@ -200,6 +203,12 @@ class Playlist:
             if song.song_id in ids:
                 raise ProjectSchemaError("song_id duplikat dalam playlist.")
             ids.add(song.song_id)
+        if self.mode == "packed":
+            for song in self.entries:
+                if song.crossfade_in_tick:
+                    raise ProjectSchemaError(
+                        "crossfade_in_tick hanya boleh aktif pada playlist mode free."
+                    )
 
     @classmethod
     def from_dict(cls, data: Any) -> "Playlist":
