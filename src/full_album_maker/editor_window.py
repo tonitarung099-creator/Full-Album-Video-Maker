@@ -19,14 +19,14 @@ from .editor_controller import RevisionConflict
 from .editor_models import ProjectDocument
 from .gemini_agent import GeminiAgent
 from .legacy_sync_v2 import sync_legacy_media
-from .s10_workspace import S10EditorWorkspace
+from .s11_workspace import S11EditorWorkspace
 from .style import APP_STYLE
 from .template_system import template_choices
 from .ui import MainWindow as LegacyMainWindow
 
 
 class EditorMainWindow(LegacyMainWindow):
-    """Main application shell with editor-v2, AI intents, and S10 template previews."""
+    """Main application shell with editor-v2, AI intents, and S11 free timeline."""
 
     def __init__(self) -> None:
         self._editor_workspace_ready = False
@@ -40,7 +40,7 @@ class EditorMainWindow(LegacyMainWindow):
 
         seed = ProjectDocument.new_empty("Editor Full Album")
         seed, _ = sync_legacy_media(seed, self.project)
-        self.editor_workspace = S10EditorWorkspace(seed, self.splitter)
+        self.editor_workspace = S11EditorWorkspace(seed, self.splitter)
         self.editor_workspace.statusMessage.connect(self._on_editor_status)
         self.editor_workspace.dirtyChanged.connect(
             lambda _: self._update_editor_title()
@@ -60,8 +60,8 @@ class EditorMainWindow(LegacyMainWindow):
         self._update_editor_title()
         self.chat.appendPlainText(
             "\n[EDITOR V2]\nGemini dapat mengedit layer, playlist, spectrum, cover, progress, dan template. "
-            "S10 menambahkan 10 template final serta preview card dari render aktual. "
-            "Semua aksi AI tetap divalidasi lokal dan satu batch dapat di-Undo sekali.\n"
+            "S11 menambahkan Free Timeline audio terpisah: gap menjadi silence dan overlap wajib crossfade eksplisit. "
+            "Gemini belum diberi aksi timing-free otomatis; kontrol S11 tetap lokal, tervalidasi, dan Undo/Redo.\n"
         )
 
     def _ensure_ai_executor(self) -> AIEditorExecutor:
@@ -83,7 +83,6 @@ class EditorMainWindow(LegacyMainWindow):
         return values
 
     def ask_agent(self):
-        """Interpret against bounded editor-v2 context, never raw paths/media metadata."""
         text = self.prompt.toPlainText().strip()
         if not text or self.agent_busy:
             return
@@ -135,7 +134,6 @@ class EditorMainWindow(LegacyMainWindow):
         threading.Thread(target=work, daemon=True).start()
 
     def _handle_agent_decision(self, decision, request_id: str):
-        """Validate/commit editor-v2 actions atomically; render only after commit."""
         try:
             self.chat.appendPlainText(f"\nGEMINI\n{decision.message}\n")
             pending = self._ai_pending.get(request_id)
