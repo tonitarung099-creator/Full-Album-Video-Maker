@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 from .editor_models import Layer, ProjectDocument
@@ -8,15 +9,64 @@ from .render_graph import CompiledFFmpeg, FFmpegV2Compiler, ticks_to_seconds
 
 
 _AUDIO_SEGMENT = re.compile(r"^\[(\d+):a\].*\[aseg(\d+)\]$")
+FILTER_GRAPH_SCRIPT_THRESHOLD = 8_192
+WINDOWS_COMMAND_SAFE_LIMIT = 30_000
+
+
+def windows_command_line_length(args: tuple[str, ...] | list[str]) -> int:
+    """Approximate CreateProcess command-line length using Windows quoting rules."""
+
+    return len(subprocess.list2cmdline([str(item) for item in args]))
+
+
+def _externalize_large_filter_graph(
+    compiled: CompiledFFmpeg,
+    work_dir: str | Path,
+) -> CompiledFFmpeg:
+    """Keep long FFmpeg graphs out of the Windows process command line.
+
+    A 200-song project can easily generate tens of thousands of filter characters.
+    FFmpeg still receives the exact same graph, but through -filter_complex_script.
+    This preserves S01-S11 semantics while materially lowering CreateProcess risk.
+    """
+
+    args = list(compiled.args)
+    try:
+        option_index = args.index("-filter_complex")
+    except ValueError:
+        return compiled
+    if option_index + 1 >= len(args):
+        return compiled
+
+    graph = args[option_index + 1]
+    if (
+        len(graph) < FILTER_GRAPH_SCRIPT_THRESHOLD
+        and windows_command_line_length(args) < WINDOWS_COMMAND_SAFE_LIMIT
+    ):
+        return compiled
+
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+    script = work / "filter-complex-s12.txt"
+    script.write_text(graph + "\n", encoding="utf-8")
+    args[option_index : option_index + 2] = [
+        "-filter_complex_script",
+        str(script),
+    ]
+    return CompiledFFmpeg(
+        tuple(args),
+        compiled.render_plan,
+        compiled.text_files + (script,),
+    )
 
 
 class S11FFmpegCompiler(FFmpegV2Compiler):
     """S10 visual compiler plus the opt-in S11 free-audio compositor.
 
-    Packed projects are returned byte-for-byte through the established S10 graph.
-    Free projects replace only the album-audio concat section with timestamped
-    segments over a finite silent base. This makes gaps actual silence while the
-    same mixed [album_audio] feeds both final audio and every spectrum branch.
+    Packed projects keep the established S10 graph. Free projects replace only
+    the album-audio concat section with timestamped segments over finite silence.
+    S12 additionally externalizes large filter graphs to avoid Windows command-line
+    exhaustion on long albums without changing the graph itself.
     """
 
     def compile_video(
@@ -34,13 +84,13 @@ class S11FFmpegCompiler(FFmpegV2Compiler):
             include_audio=include_audio,
         )
         if document.playlist.mode != "free":
-            return compiled
+            return _externalize_large_filter_graph(compiled, work_dir)
 
         args = list(compiled.args)
         try:
             filter_index = args.index("-filter_complex") + 1
         except ValueError:
-            return compiled
+            return _externalize_large_filter_graph(compiled, work_dir)
         graph = args[filter_index]
         parts = graph.split(";")
 
@@ -63,7 +113,7 @@ class S11FFmpegCompiler(FFmpegV2Compiler):
         # no audio inputs. In that case visual free timing still comes from the
         # shared resolver and no audio graph needs to be synthesized.
         if not input_by_event:
-            return compiled
+            return _externalize_large_filter_graph(compiled, work_dir)
 
         events = list(compiled.render_plan.audio_events)
         if set(input_by_event) != set(range(len(events))):
@@ -142,8 +192,9 @@ class S11FFmpegCompiler(FFmpegV2Compiler):
         video_base = [part for part in kept if part.startswith("[0:v]")]
         remaining = [part for part in kept if not part.startswith("[0:v]")]
         args[filter_index] = ";".join(video_base + audio_parts + remaining)
-        return CompiledFFmpeg(
+        result = CompiledFFmpeg(
             tuple(args),
             compiled.render_plan,
             compiled.text_files,
         )
+        return _externalize_large_filter_graph(result, work_dir)
