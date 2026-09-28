@@ -95,7 +95,7 @@ def _document(tmp_path: Path, *, white: bool = False) -> ProjectDocument:
     tmp_path.mkdir(parents=True, exist_ok=True)
     doc = ProjectDocument.new_empty("S10")
     doc.canvas.width = 320
-    doc.canvas.height = 180
+    doc.canvas.height = 240
     doc.canvas.background_color = "#ffffff" if white else "#10131a"
     audio_path = _audio(tmp_path)
     cover_path = _cover(tmp_path)
