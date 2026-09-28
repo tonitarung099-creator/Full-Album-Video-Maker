@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 from .editor_commands import CommandError, DeleteLayer, EditorCommand, SetCanvasBackground
 from .editor_models import Layer, ProjectDocument, TimeBinding, Transform, new_id
+from .overlay_effects import normalize_effect_properties
 from .paths import data_dir
 from .template_system import ReplaceTemplateLayers, current_template_id
 
@@ -94,23 +95,38 @@ def _portable_properties(layer: Layer) -> dict[str, Any]:
         props.pop("font_path", None)
     if layer.type == "background":
         mode = str(props.get("mode", "solid"))
-        if mode != "solid":
+        if mode == "asset":
             raise CustomTemplateError(
                 f"Layer '{layer.name}' memakai background image/video. "
-                "S08 hanya menyimpan background solid agar template tetap portabel."
+                "Template portabel tidak menyimpan referensi asset project."
             )
-        # Asset refs untuk background solid tidak diperlukan.
+        if mode == "effect":
+            try:
+                normalized = normalize_effect_properties(props)
+            except ValueError as exc:
+                raise CustomTemplateError(
+                    f"Effect procedural '{layer.name}' tidak valid: {exc}"
+                ) from exc
+            normalized["mode"] = "effect"
+            props = normalized
+        elif mode != "solid":
+            raise CustomTemplateError(
+                f"Mode background '{mode}' belum portabel untuk template kustom."
+            )
+        # Solid/effect tidak membutuhkan asset id atau path project.
         props.pop("asset_id", None)
     return props
 
 
 def _portable_layer_spec(layer: Layer) -> dict[str, Any]:
     if layer.type not in PORTABLE_TEMPLATE_LAYER_TYPES:
-        raise CustomTemplateError(f"Tipe layer belum portabel untuk template: {layer.type}")
+        raise CustomTemplateError(
+            f"Tipe layer belum portabel untuk template: {layer.type}"
+        )
     if layer.asset_refs and layer.type != "song_cover":
         raise CustomTemplateError(
             f"Layer '{layer.name}' masih bergantung asset project. "
-            "Gunakan elemen dinamis/solid sebelum menyimpan template portabel."
+            "Gunakan elemen dinamis/solid/procedural sebelum menyimpan template portabel."
         )
     transform = {
         "x": float(layer.transform.x),
@@ -156,7 +172,10 @@ class CustomTemplate:
         _custom_uuid(self.template_id)
         _clean_label(self.label)
         _clean_description(self.description)
-        if not isinstance(self.canvas_background_color, str) or not self.canvas_background_color.strip():
+        if (
+            not isinstance(self.canvas_background_color, str)
+            or not self.canvas_background_color.strip()
+        ):
             raise CustomTemplateError("Warna background template tidak valid.")
         if not self.layers:
             raise CustomTemplateError("Template kustom tidak memiliki layer.")
@@ -168,12 +187,16 @@ class CustomTemplate:
             try:
                 UUID(self.source_project_id)
             except (ValueError, TypeError, AttributeError) as exc:
-                raise CustomTemplateError("source_project_id template tidak valid.") from exc
+                raise CustomTemplateError(
+                    "source_project_id template tidak valid."
+                ) from exc
         for layer_id in self.source_layer_ids:
             try:
                 UUID(layer_id)
             except (ValueError, TypeError, AttributeError) as exc:
-                raise CustomTemplateError("source_layer_ids template tidak valid.") from exc
+                raise CustomTemplateError(
+                    "source_layer_ids template tidak valid."
+                ) from exc
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -205,8 +228,12 @@ class CustomTemplate:
             template_id=str(data.get("template_id", "")),
             label=str(data.get("label", "")),
             description=str(data.get("description", "") or ""),
-            canvas_background_color=str(data.get("canvas_background_color", "#101114")),
-            layers=tuple(_json_safe_copy(layer, "Layer template") for layer in layers),
+            canvas_background_color=str(
+                data.get("canvas_background_color", "#101114")
+            ),
+            layers=tuple(
+                _json_safe_copy(layer, "Layer template") for layer in layers
+            ),
             source_project_id=str(data.get("source_project_id", "") or ""),
             source_layer_ids=tuple(str(value) for value in source_layer_ids),
         )
@@ -219,15 +246,22 @@ def _validate_layer_spec(spec: Any) -> None:
         raise CustomTemplateError("Spec layer template tidak valid.")
     layer_type = str(spec.get("type", ""))
     if layer_type not in PORTABLE_TEMPLATE_LAYER_TYPES:
-        raise CustomTemplateError(f"Tipe layer template tidak didukung: {layer_type}")
+        raise CustomTemplateError(
+            f"Tipe layer template tidak didukung: {layer_type}"
+        )
     transform_data = spec.get("transform", {})
     if not isinstance(transform_data, dict):
         raise CustomTemplateError("Transform template tidak valid.")
     try:
         transform = Transform.from_dict(transform_data)
     except Exception as exc:
-        raise CustomTemplateError(f"Transform template tidak valid: {exc}") from exc
-    if not 0.02 <= transform.width <= 3.0 or not 0.02 <= transform.height <= 3.0:
+        raise CustomTemplateError(
+            f"Transform template tidak valid: {exc}"
+        ) from exc
+    if (
+        not 0.02 <= transform.width <= 3.0
+        or not 0.02 <= transform.height <= 3.0
+    ):
         raise CustomTemplateError("Ukuran layer template harus 0.02..3.0.")
     opacity = float(spec.get("opacity", 1.0))
     if not 0.0 <= opacity <= 1.0:
@@ -238,9 +272,26 @@ def _validate_layer_spec(spec: Any) -> None:
     properties = spec.get("properties", {})
     animation = spec.get("animation", {})
     if not isinstance(properties, dict) or not isinstance(animation, dict):
-        raise CustomTemplateError("Properties/animation template tidak valid.")
-    if layer_type == "background" and str(properties.get("mode", "solid")) != "solid":
-        raise CustomTemplateError("Background asset tidak boleh ada di template portabel.")
+        raise CustomTemplateError(
+            "Properties/animation template tidak valid."
+        )
+    if layer_type == "background":
+        mode = str(properties.get("mode", "solid"))
+        if mode == "asset":
+            raise CustomTemplateError(
+                "Background asset tidak boleh ada di template portabel."
+            )
+        if mode == "effect":
+            try:
+                normalize_effect_properties(properties)
+            except ValueError as exc:
+                raise CustomTemplateError(
+                    f"Effect procedural template tidak valid: {exc}"
+                ) from exc
+        elif mode != "solid":
+            raise CustomTemplateError(
+                f"Mode background template tidak didukung: {mode}"
+            )
     _json_safe_copy(properties, "Properties template")
     _json_safe_copy(animation, "Animation template")
 
@@ -253,14 +304,19 @@ def capture_custom_template(
     template_id: str | None = None,
 ) -> CustomTemplate:
     document.validate()
-    visual_tracks = {track.track_id for track in document.tracks if track.kind == "visual"}
+    visual_tracks = {
+        track.track_id for track in document.tracks if track.kind == "visual"
+    }
     candidates = [
         layer
         for layer in sorted(document.layers, key=lambda item: item.order)
-        if layer.track_id in visual_tracks and layer.type in PORTABLE_TEMPLATE_LAYER_TYPES
+        if layer.track_id in visual_tracks
+        and layer.type in PORTABLE_TEMPLATE_LAYER_TYPES
     ]
     if not candidates:
-        raise CustomTemplateError("Tidak ada layer visual portabel yang bisa disimpan sebagai template.")
+        raise CustomTemplateError(
+            "Tidak ada layer visual portabel yang bisa disimpan sebagai template."
+        )
     specs = tuple(_portable_layer_spec(layer) for layer in candidates)
     item = CustomTemplate(
         template_id=template_id or new_custom_template_id(),
@@ -276,20 +332,41 @@ def capture_custom_template(
 
 
 def _first_image_asset_id(document: ProjectDocument) -> str:
-    return next((asset.asset_id for asset in document.media if asset.kind == "image"), "")
+    return next(
+        (asset.asset_id for asset in document.media if asset.kind == "image"),
+        "",
+    )
 
 
-def build_custom_template_layers(document: ProjectDocument, template: CustomTemplate) -> list[Layer]:
+def build_custom_template_layers(
+    document: ProjectDocument,
+    template: CustomTemplate,
+) -> list[Layer]:
     document.validate()
     template.validate()
-    track = next((item for item in document.tracks if item.kind == "visual" and item.enabled), None)
+    track = next(
+        (
+            item
+            for item in document.tracks
+            if item.kind == "visual" and item.enabled
+        ),
+        None,
+    )
     if track is None:
-        track = next((item for item in document.tracks if item.kind == "visual"), None)
+        track = next(
+            (item for item in document.tracks if item.kind == "visual"),
+            None,
+        )
     if track is None:
-        raise CustomTemplateError("Template kustom membutuhkan track visual.")
+        raise CustomTemplateError(
+            "Template kustom membutuhkan track visual."
+        )
     fallback_image = _first_image_asset_id(document)
     result: list[Layer] = []
-    for spec in sorted(template.layers, key=lambda item: int(item.get("order", 0))):
+    for spec in sorted(
+        template.layers,
+        key=lambda item: int(item.get("order", 0)),
+    ):
         _validate_layer_spec(spec)
         properties = deepcopy(spec.get("properties", {}))
         if str(spec.get("type")) == "song_cover":
@@ -321,7 +398,9 @@ class SetCustomTemplateMarker(EditorCommand):
     template_id: str = ""
 
     def apply(self, document: ProjectDocument) -> EditorCommand:
-        old = str(document.editor_defaults.get("custom_template_id", "") or "")
+        old = str(
+            document.editor_defaults.get("custom_template_id", "") or ""
+        )
         if self.template_id:
             if not is_custom_template_id(self.template_id):
                 raise CommandError("ID template kustom tidak valid.")
@@ -332,7 +411,9 @@ class SetCustomTemplateMarker(EditorCommand):
 
 
 def current_custom_template_id(document: ProjectDocument) -> str:
-    value = str(document.editor_defaults.get("custom_template_id", "") or "")
+    value = str(
+        document.editor_defaults.get("custom_template_id", "") or ""
+    )
     return value if is_custom_template_id(value) else ""
 
 
@@ -351,7 +432,10 @@ def apply_custom_template_commands(
     # Jika template dibuat dari project yang sama, layer manual sumber yang ikut
     # disimpan dihapus saat re-apply agar tidak muncul duplikat. Di project lain
     # tidak ada layer manual yang disentuh.
-    if template.source_project_id and template.source_project_id == document.project_id:
+    if (
+        template.source_project_id
+        and template.source_project_id == document.project_id
+    ):
         layer_map = document.layer_map()
         for layer_id in template.source_layer_ids:
             layer = layer_map.get(layer_id)
@@ -373,14 +457,21 @@ def apply_custom_template_commands(
     return tuple(commands)
 
 
-def apply_builtin_template_commands(document: ProjectDocument, command: EditorCommand) -> tuple[EditorCommand, ...]:
+def apply_builtin_template_commands(
+    document: ProjectDocument,
+    command: EditorCommand,
+) -> tuple[EditorCommand, ...]:
     # Built-in template harus membersihkan marker custom dalam transaksi undo yang sama.
     return (command, SetCustomTemplateMarker(""))
 
 
 class CustomTemplateStore:
     def __init__(self, root: str | Path | None = None) -> None:
-        self.root = Path(root) if root is not None else data_dir() / "templates" / "custom"
+        self.root = (
+            Path(root)
+            if root is not None
+            else data_dir() / "templates" / "custom"
+        )
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path_for_id(self, template_id: str) -> Path:
@@ -392,7 +483,9 @@ class CustomTemplateStore:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except OSError as exc:
-            raise CustomTemplateError(f"Template tidak dapat dibaca: {exc}") from exc
+            raise CustomTemplateError(
+                f"Template tidak dapat dibaca: {exc}"
+            ) from exc
         except json.JSONDecodeError as exc:
             raise CustomTemplateError("JSON template kustom rusak.") from exc
         return CustomTemplate.from_dict(raw)
@@ -400,7 +493,15 @@ class CustomTemplateStore:
     @staticmethod
     def _atomic_write(path: Path, template: CustomTemplate) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(template.to_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        payload = (
+            json.dumps(
+                template.to_dict(),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
         temp = path.with_name(path.name + f".{uuid4().hex}.tmp")
         try:
             with temp.open("w", encoding="utf-8", newline="\n") as handle:
@@ -436,7 +537,9 @@ class CustomTemplateStore:
             raise CustomTemplateError("Template kustom tidak ditemukan.")
         item = self._read_path(path)
         if item.template_id != template_id:
-            raise CustomTemplateError("ID file template tidak cocok dengan nama penyimpanan.")
+            raise CustomTemplateError(
+                "ID file template tidak cocok dengan nama penyimpanan."
+            )
         return item
 
     def scan(self) -> tuple[list[CustomTemplate], list[str]]:
@@ -447,7 +550,9 @@ class CustomTemplateStore:
                 templates.append(self._read_path(path))
             except Exception as exc:
                 errors.append(f"{path.name}: {exc}")
-        templates.sort(key=lambda item: (item.label.casefold(), item.template_id))
+        templates.sort(
+            key=lambda item: (item.label.casefold(), item.template_id)
+        )
         return templates, errors
 
     def delete(self, template_id: str) -> None:
@@ -456,7 +561,11 @@ class CustomTemplateStore:
             raise CustomTemplateError("Template kustom tidak ditemukan.")
         path.unlink()
 
-    def export_template(self, template_id: str, destination: str | Path) -> Path:
+    def export_template(
+        self,
+        template_id: str,
+        destination: str | Path,
+    ) -> Path:
         template = self.load(template_id)
         path = Path(destination)
         if not path.name.lower().endswith(CUSTOM_TEMPLATE_SUFFIX):

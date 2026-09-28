@@ -8,6 +8,7 @@ from typing import Iterable
 
 from .album_visuals import format_duration_tick, normalize_visual_properties
 from .editor_models import Layer, ProjectDocument, TIMEBASE
+from .overlay_effects import effect_source_filter, normalize_effect_properties
 from .render_plan import RenderPlan, compile_render_plan
 from .spectrum_feature import dynamic_song_text, normalize_spectrum_properties
 from .timeline_resolver import TimelineResolver
@@ -115,7 +116,13 @@ def _intersect_intervals(
 
 
 def _ffmpeg_scale(value: str) -> str:
-    return {"linear": "lin", "sqrt": "sqrt", "cbrt": "cbrt", "log": "log", "rlog": "rlog"}.get(value, value)
+    return {
+        "linear": "lin",
+        "sqrt": "sqrt",
+        "cbrt": "cbrt",
+        "log": "log",
+        "rlog": "rlog",
+    }.get(value, value)
 
 
 def _clock_text(total_tick: int) -> str:
@@ -129,9 +136,8 @@ def _clock_text(total_tick: int) -> str:
 class FFmpegV2Compiler:
     """Compiler shared by final render and accurate preview.
 
-    S06 keeps the S05 audio visualizer path and adds album visuals: dynamic
-    covers, procedural vinyl, playlist panels, progress bars and duration text.
-    Preview Akurat still calls this exact compiler.
+    S10 extends the same proven S06 compiler with bounded procedural overlay
+    effects. Preview Akurat and final render therefore keep one composition path.
     """
 
     def __init__(self, ffmpeg: str) -> None:
@@ -160,9 +166,16 @@ class FFmpegV2Compiler:
         duration = ticks_to_seconds(resolved.duration_tick)
         fps = document.canvas.fps_num / document.canvas.fps_den
 
-        args: list[str] = [self.ffmpeg, "-y", "-hide_banner", "-loglevel", "warning"]
+        args: list[str] = [
+            self.ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+        ]
         args += [
-            "-f", "lavfi",
+            "-f",
+            "lavfi",
             "-i",
             f"color=c={_color(document.canvas.background_color, '#101114')}:s={document.canvas.width}x{document.canvas.height}:r={fps:g}:d={duration:.6f}",
         ]
@@ -192,25 +205,54 @@ class FFmpegV2Compiler:
             if not layer.enabled or not track.enabled:
                 continue
             if layer.type not in supported:
-                raise RenderCompileError(f"Layer aktif belum didukung compiler S06: {layer.type}")
+                raise RenderCompileError(
+                    f"Layer aktif belum didukung compiler S10: {layer.type}"
+                )
             if layer.type == "spectrum":
                 try:
                     normalize_spectrum_properties(layer.properties)
                 except ValueError as exc:
                     raise RenderCompileError(str(exc)) from exc
-            if layer.type in {"song_cover", "vinyl", "playlist_visual", "progress", "song_time"}:
+            if layer.type in {
+                "song_cover",
+                "vinyl",
+                "playlist_visual",
+                "progress",
+                "song_time",
+            }:
                 try:
                     normalize_visual_properties(layer.type, layer.properties)
                 except ValueError as exc:
                     raise RenderCompileError(str(exc)) from exc
+            if layer.type == "background":
+                mode = str(
+                    layer.properties.get(
+                        "mode",
+                        "asset" if layer.asset_refs else "solid",
+                    )
+                )
+                if mode == "effect":
+                    try:
+                        normalize_effect_properties(layer.properties)
+                    except ValueError as exc:
+                        raise RenderCompileError(str(exc)) from exc
+                elif mode not in {"solid", "asset"}:
+                    raise RenderCompileError("Mode background harus solid/asset/effect.")
             active_layers.append(layer)
 
             if layer.type == "background":
-                mode = str(layer.properties.get("mode", "asset" if layer.asset_refs else "solid"))
-                if mode == "solid":
+                mode = str(
+                    layer.properties.get(
+                        "mode",
+                        "asset" if layer.asset_refs else "solid",
+                    )
+                )
+                if mode in {"solid", "effect"}:
                     continue
                 if not layer.asset_refs:
-                    raise RenderCompileError("Background asset tidak memiliki referensi media.")
+                    raise RenderCompileError(
+                        "Background asset tidak memiliki referensi media."
+                    )
                 asset = assets.get(layer.asset_refs[0])
                 if asset is None or asset.kind not in {"image", "video"}:
                     raise RenderCompileError("Background harus merujuk image/video.")
@@ -223,13 +265,23 @@ class FFmpegV2Compiler:
                 else:
                     playback = str(layer.properties.get("playback", "loop"))
                     if playback not in {"loop", "freeze"}:
-                        raise RenderCompileError("playback background harus loop/freeze.")
+                        raise RenderCompileError(
+                            "playback background harus loop/freeze."
+                        )
                     if playback == "loop":
-                        args += ["-stream_loop", "-1", "-an", "-i", asset.locator]
+                        args += [
+                            "-stream_loop",
+                            "-1",
+                            "-an",
+                            "-i",
+                            asset.locator,
+                        ]
                     else:
                         args += ["-an", "-i", asset.locator]
 
-        cover_layers = [layer for layer in active_layers if layer.type == "song_cover"]
+        cover_layers = [
+            layer for layer in active_layers if layer.type == "song_cover"
+        ]
         for layer in cover_layers:
             props = normalize_visual_properties("song_cover", layer.properties)
             fallback_id = props["fallback_asset_id"]
@@ -243,13 +295,17 @@ class FFmpegV2Compiler:
                     continue
                 asset = assets.get(asset_id)
                 if asset is None or asset.kind != "image":
-                    raise RenderCompileError("Cover dinamis harus merujuk asset image.")
+                    raise RenderCompileError(
+                        "Cover dinamis harus merujuk asset image."
+                    )
                 used_ids.add(asset_id)
                 cover_input_index[(layer.layer_id, asset_id)] = next_input
                 next_input += 1
                 args += ["-loop", "1", "-i", asset.locator]
 
-        spectrum_layers = [layer for layer in active_layers if layer.type == "spectrum"]
+        spectrum_layers = [
+            layer for layer in active_layers if layer.type == "spectrum"
+        ]
         needs_album_audio = include_audio or bool(spectrum_layers)
         audio_input_index: dict[str, int] = {}
         if needs_album_audio:
@@ -258,8 +314,17 @@ class FFmpegV2Compiler:
                 audio_input_index[event.song_id] = next_input
                 next_input += 1
                 source_in = ticks_to_seconds(event.source_in_tick)
-                source_duration = ticks_to_seconds(event.source_out_tick - event.source_in_tick)
-                args += ["-ss", f"{source_in:.6f}", "-t", f"{source_duration:.6f}", "-i", asset.locator]
+                source_duration = ticks_to_seconds(
+                    event.source_out_tick - event.source_in_tick
+                )
+                args += [
+                    "-ss",
+                    f"{source_in:.6f}",
+                    "-t",
+                    f"{source_duration:.6f}",
+                    "-i",
+                    asset.locator,
+                ]
 
         filters: list[str] = ["[0:v]setpts=PTS-STARTPTS[v0]"]
         current = "v0"
@@ -271,13 +336,18 @@ class FFmpegV2Compiler:
             for idx, event in enumerate(plan.audio_events):
                 input_index = audio_input_index[event.song_id]
                 label = f"aseg{idx}"
-                event_duration = ticks_to_seconds(event.end_tick - event.start_tick)
+                event_duration = ticks_to_seconds(
+                    event.end_tick - event.start_tick
+                )
                 filters.append(
                     f"[{input_index}:a]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
                     f"atrim=duration={event_duration:.6f},asetpts=PTS-STARTPTS[{label}]"
                 )
                 audio_labels.append(f"[{label}]")
-            filters.append("".join(audio_labels) + f"concat=n={len(audio_labels)}:v=0:a=1[album_audio]")
+            filters.append(
+                "".join(audio_labels)
+                + f"concat=n={len(audio_labels)}:v=0:a=1[album_audio]"
+            )
 
             branches: list[tuple[str, str]] = []
             if include_audio:
@@ -290,12 +360,21 @@ class FFmpegV2Compiler:
                 filters.append(f"[album_audio]anull[{branches[0][1]}]")
             else:
                 outputs = "".join(f"[{label}]" for _, label in branches)
-                filters.append(f"[album_audio]asplit={len(branches)}{outputs}")
+                filters.append(
+                    f"[album_audio]asplit={len(branches)}{outputs}"
+                )
 
         stage = 1
         for layer in active_layers:
             resolved_layer = resolved_by_layer.get(layer.layer_id)
-            intervals = [] if resolved_layer is None else [(x.start_tick, x.end_tick) for x in resolved_layer.intervals]
+            intervals = (
+                []
+                if resolved_layer is None
+                else [
+                    (item.start_tick, item.end_tick)
+                    for item in resolved_layer.intervals
+                ]
+            )
             enable = _escape_enable(intervals)
 
             if layer.type == "background":
@@ -306,55 +385,118 @@ class FFmpegV2Compiler:
                 rotate = _rotation_chain(layer)
                 alpha = max(0.0, min(1.0, float(layer.opacity)))
                 source_label = f"bg{local_stage}"
-                mode = str(layer.properties.get("mode", "asset" if layer.asset_refs else "solid"))
+                mode = str(
+                    layer.properties.get(
+                        "mode",
+                        "asset" if layer.asset_refs else "solid",
+                    )
+                )
                 if mode == "solid":
-                    color = _color(layer.properties.get("color", document.canvas.background_color))
+                    color = _color(
+                        layer.properties.get(
+                            "color",
+                            document.canvas.background_color,
+                        )
+                    )
                     filters.append(
                         f"color=c={color}:s={width}x{height}:r={fps:g}:d={duration:.6f},"
                         f"format=rgba,colorchannelmixer=aa={alpha:.6f}{rotate}[{source_label}]"
+                    )
+                elif mode == "effect":
+                    try:
+                        effect_chain = effect_source_filter(
+                            layer.properties,
+                            width=width,
+                            height=height,
+                            fps=fps,
+                            duration=duration,
+                            layer_opacity=alpha,
+                        )
+                    except ValueError as exc:
+                        raise RenderCompileError(str(exc)) from exc
+                    filters.append(
+                        f"{effect_chain}{rotate}[{source_label}]"
                     )
                 else:
                     asset = assets[layer.asset_refs[0]]
                     index = media_input_index[asset.asset_id]
                     fit = str(layer.properties.get("fit", "fill"))
                     if fit == "fill":
-                        geometry = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
+                        geometry = (
+                            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+                            f"crop={width}:{height}"
+                        )
                     elif fit in {"fit", "fit_blur"}:
-                        geometry = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black@0"
+                        geometry = (
+                            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black@0"
+                        )
                     else:
-                        raise RenderCompileError("Mode fit background tidak valid.")
+                        raise RenderCompileError(
+                            "Mode fit background tidak valid."
+                        )
                     playback = str(layer.properties.get("playback", "loop"))
                     freeze = ""
                     if asset.kind == "video" and playback == "freeze":
-                        freeze = f",trim=end_frame=1,loop=loop=-1:size=1:start=0,setpts=N/{fps:g}/TB"
+                        freeze = (
+                            f",trim=end_frame=1,loop=loop=-1:size=1:start=0,"
+                            f"setpts=N/{fps:g}/TB"
+                        )
                     motion = str(layer.properties.get("motion", "static"))
-                    if motion not in {"static", "zoom_in", "zoom_out", "pan_left", "pan_right"}:
-                        raise RenderCompileError("Motion background belum didukung.")
+                    if motion not in {
+                        "static",
+                        "zoom_in",
+                        "zoom_out",
+                        "pan_left",
+                        "pan_right",
+                    }:
+                        raise RenderCompileError(
+                            "Motion background belum didukung."
+                        )
                     motion_chain = ""
                     frame_count = max(1, round(duration * fps))
                     if motion == "zoom_in":
-                        motion_chain = f",zoompan=z='min(1.08,1+0.08*on/{frame_count})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={width}x{height}:fps={fps:g}"
+                        motion_chain = (
+                            f",zoompan=z='min(1.08,1+0.08*on/{frame_count})':"
+                            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                            f"d=1:s={width}x{height}:fps={fps:g}"
+                        )
                     elif motion == "zoom_out":
-                        motion_chain = f",zoompan=z='max(1,1.08-0.08*on/{frame_count})':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={width}x{height}:fps={fps:g}"
+                        motion_chain = (
+                            f",zoompan=z='max(1,1.08-0.08*on/{frame_count})':"
+                            f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                            f"d=1:s={width}x{height}:fps={fps:g}"
+                        )
                     elif motion in {"pan_left", "pan_right"}:
                         if motion == "pan_right":
                             x_expr = f"(iw-iw/zoom)*on/{frame_count}"
                         else:
-                            x_expr = f"(iw-iw/zoom)*(1-on/{frame_count})"
-                        motion_chain = f",zoompan=z='1.08':x='{x_expr}':y='ih/2-(ih/zoom/2)':d=1:s={width}x{height}:fps={fps:g}"
+                            x_expr = (
+                                f"(iw-iw/zoom)*(1-on/{frame_count})"
+                            )
+                        motion_chain = (
+                            f",zoompan=z='1.08':x='{x_expr}':"
+                            f"y='ih/2-(ih/zoom/2)':d=1:"
+                            f"s={width}x{height}:fps={fps:g}"
+                        )
                     filters.append(
-                        f"[{index}:v]{geometry}{freeze}{motion_chain},format=rgba,colorchannelmixer=aa={alpha:.6f},"
-                        f"setpts=PTS-STARTPTS{rotate}[{source_label}]"
+                        f"[{index}:v]{geometry}{freeze}{motion_chain},format=rgba,"
+                        f"colorchannelmixer=aa={alpha:.6f},setpts=PTS-STARTPTS"
+                        f"{rotate}[{source_label}]"
                     )
                 filters.append(
                     f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
-                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=repeat:enable='{enable}'[{out}]"
+                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:"
+                    f"eof_action=repeat:enable='{enable}'[{out}]"
                 )
                 current = out
                 continue
 
             if layer.type == "song_cover":
-                props = normalize_visual_properties("song_cover", layer.properties)
+                props = normalize_visual_properties(
+                    "song_cover",
+                    layer.properties,
+                )
                 fallback_id = props["fallback_asset_id"]
                 width, height = _layer_size(layer, document)
                 rotate = _rotation_chain(layer)
@@ -365,27 +507,40 @@ class FFmpegV2Compiler:
                     asset_id = song.cover_asset_id or fallback_id
                     if not asset_id:
                         continue
-                    grouped[asset_id].extend(_intersect_intervals(intervals, event.start_tick, event.end_tick))
+                    grouped[asset_id].extend(
+                        _intersect_intervals(
+                            intervals,
+                            event.start_tick,
+                            event.end_tick,
+                        )
+                    )
                 for asset_id, cover_intervals in grouped.items():
                     if not cover_intervals:
                         continue
                     index = cover_input_index[(layer.layer_id, asset_id)]
                     fit = props["fit"]
                     if fit == "fill":
-                        geometry = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
+                        geometry = (
+                            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+                            f"crop={width}:{height}"
+                        )
                     else:
-                        geometry = f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black@0"
+                        geometry = (
+                            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black@0"
+                        )
                     source_label = f"cover{stage}"
                     out = f"v{stage}"
                     stage += 1
                     filters.append(
-                        f"[{index}:v]{geometry},format=rgba,colorchannelmixer=aa={alpha:.6f},"
-                        f"setpts=PTS-STARTPTS{rotate}[{source_label}]"
+                        f"[{index}:v]{geometry},format=rgba,"
+                        f"colorchannelmixer=aa={alpha:.6f},setpts=PTS-STARTPTS"
+                        f"{rotate}[{source_label}]"
                     )
                     filters.append(
                         f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
-                        f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=repeat:"
-                        f"enable='{_escape_enable(cover_intervals)}'[{out}]"
+                        f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:"
+                        f"eof_action=repeat:enable='{_escape_enable(cover_intervals)}'[{out}]"
                     )
                     current = out
                 continue
@@ -403,32 +558,43 @@ class FFmpegV2Compiler:
                 radius = "hypot(X-W/2,Y-H/2)"
                 dot = (
                     f"lte(hypot(X-(W/2+cos(2*PI*T/{spin:.6f})*W*0.32),"
-                    f"Y-(H/2+sin(2*PI*T/{spin:.6f})*H*0.32)),min(W,H)*0.025)"
+                    f"Y-(H/2+sin(2*PI*T/{spin:.6f})*H*0.32)),"
+                    "min(W,H)*0.025)"
                 )
                 channel_exprs: list[str] = []
-                for base_value, groove_value, center_value in zip(base, groove, center_rgb):
+                for base_value, groove_value, center_value in zip(
+                    base,
+                    groove,
+                    center_rgb,
+                ):
                     channel_exprs.append(
-                        f"if(lte({radius},min(W,H)*{center_ratio:.6f}),{center_value},"
-                        f"if({dot},{groove_value},if(lt(mod({radius},12),1.4),{groove_value},{base_value})))"
+                        f"if(lte({radius},min(W,H)*{center_ratio:.6f}),"
+                        f"{center_value},if({dot},{groove_value},"
+                        f"if(lt(mod({radius},12),1.4),{groove_value},{base_value})))"
                     )
                 source_label = f"vinyl{stage}"
                 out = f"v{stage}"
                 stage += 1
                 filters.append(
-                    f"nullsrc=s={width}x{height}:r={fps:g}:d={duration:.6f},format=rgba,"
-                    f"geq=r='{channel_exprs[0]}':g='{channel_exprs[1]}':b='{channel_exprs[2]}':"
+                    f"nullsrc=s={width}x{height}:r={fps:g}:d={duration:.6f},"
+                    f"format=rgba,geq=r='{channel_exprs[0]}':"
+                    f"g='{channel_exprs[1]}':b='{channel_exprs[2]}':"
                     f"a='if(lte({radius},min(W,H)/2),255,0)',"
                     f"colorchannelmixer=aa={alpha:.6f}{rotate}[{source_label}]"
                 )
                 filters.append(
                     f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
-                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=pass:enable='{enable}'[{out}]"
+                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:"
+                    f"eof_action=pass:enable='{enable}'[{out}]"
                 )
                 current = out
                 continue
 
             if layer.type == "playlist_visual":
-                props = normalize_visual_properties("playlist_visual", layer.properties)
+                props = normalize_visual_properties(
+                    "playlist_visual",
+                    layer.properties,
+                )
                 width, height = _layer_size(layer, document)
                 rotate = _rotation_chain(layer)
                 alpha = max(0.0, min(1.0, float(layer.opacity)))
@@ -441,46 +607,75 @@ class FFmpegV2Compiler:
                 out = f"v{stage}"
                 stage += 1
                 chain = (
-                    f"color=c=black@0:s={width}x{height}:r={fps:g}:d={duration:.6f},format=rgba,"
-                    f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{props['background_opacity']:.3f}:t=fill:enable='{enable}'"
+                    f"color=c=black@0:s={width}x{height}:r={fps:g}:d={duration:.6f},"
+                    f"format=rgba,drawbox=x=0:y=0:w=iw:h=ih:"
+                    f"color=black@{props['background_opacity']:.3f}:t=fill:"
+                    f"enable='{enable}'"
                 )
                 events = list(plan.audio_events)
-                font_path = str(layer.properties.get("font_path", "") or "").strip()
-                font_prefix = f"fontfile='{_filter_path(Path(font_path))}':" if font_path else ""
+                font_path = str(
+                    layer.properties.get("font_path", "") or ""
+                ).strip()
+                font_prefix = (
+                    f"fontfile='{_filter_path(Path(font_path))}':"
+                    if font_path
+                    else ""
+                )
                 for page_index in range(0, len(events), max_items):
                     page = events[page_index : page_index + max_items]
                     if not page:
                         continue
-                    page_intervals = _intersect_intervals(intervals, page[0].start_tick, page[-1].end_tick)
+                    page_intervals = _intersect_intervals(
+                        intervals,
+                        page[0].start_tick,
+                        page[-1].end_tick,
+                    )
                     page_enable = _escape_enable(page_intervals)
                     for row_index, event in enumerate(page):
                         song = songs[event.song_id]
                         asset = assets[song.asset_id]
-                        title = (song.display_title or Path(asset.locator).stem).strip()
+                        title = (
+                            song.display_title or Path(asset.locator).stem
+                        ).strip()
                         if props["show_artist"] and song.display_artist:
                             title = f"{title} — {song.display_artist.strip()}"
                         if props["numbered"]:
-                            title = f"{page_index + row_index + 1:02d}. {title}"
+                            title = (
+                                f"{page_index + row_index + 1:02d}. {title}"
+                            )
                         title = title[:96]
-                        text_path = work / f"playlist-{layer.layer_id}-{page_index + row_index}.txt"
+                        text_path = work / (
+                            f"playlist-{layer.layer_id}-{page_index + row_index}.txt"
+                        )
                         text_path.write_text(title, encoding="utf-8")
                         text_files.append(text_path)
                         y = row_index * row_height
                         common = (
-                            f"{font_prefix}textfile='{_filter_path(text_path)}':reload=0:x=10:"
-                            f"y='{y:.3f}+({row_height:.3f}-text_h)/2':fontsize={fontsize}"
+                            f"{font_prefix}textfile='{_filter_path(text_path)}':"
+                            f"reload=0:x=10:y='{y:.3f}+({row_height:.3f}-text_h)/2':"
+                            f"fontsize={fontsize}"
                         )
-                        chain += f",drawtext={common}:fontcolor={fontcolor}:enable='{page_enable}'"
-                        active_intervals = _intersect_intervals(intervals, event.start_tick, event.end_tick)
+                        chain += (
+                            f",drawtext={common}:fontcolor={fontcolor}:"
+                            f"enable='{page_enable}'"
+                        )
+                        active_intervals = _intersect_intervals(
+                            intervals,
+                            event.start_tick,
+                            event.end_tick,
+                        )
                         chain += (
                             f",drawtext={common}:fontcolor={active_color}:"
                             f"enable='{_escape_enable(active_intervals)}'"
                         )
-                chain += f",colorchannelmixer=aa={alpha:.6f}{rotate}[{source_label}]"
+                chain += (
+                    f",colorchannelmixer=aa={alpha:.6f}{rotate}[{source_label}]"
+                )
                 filters.append(chain)
                 filters.append(
                     f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
-                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=pass:enable='{enable}'[{out}]"
+                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:"
+                    f"eof_action=pass:enable='{enable}'[{out}]"
                 )
                 current = out
                 continue
@@ -493,7 +688,11 @@ class FFmpegV2Compiler:
                 bg = _rgb(props["background_color"])
                 fill = _rgb(props["fill_color"])
 
-                def append_progress_source(source_duration: float, start_tick: int, source_enable: str) -> None:
+                def append_progress_source(
+                    source_duration: float,
+                    start_tick: int,
+                    source_enable: str,
+                ) -> None:
                     nonlocal current, stage
                     if source_duration <= 0:
                         return
@@ -501,18 +700,23 @@ class FFmpegV2Compiler:
                     source_label = f"progress{stage}"
                     out_label = f"v{stage}"
                     stage += 1
-                    setpts = "" if start_tick <= 0 else f",setpts=PTS+{ticks_to_seconds(start_tick):.6f}/TB"
+                    setpts = (
+                        ""
+                        if start_tick <= 0
+                        else f",setpts=PTS+{ticks_to_seconds(start_tick):.6f}/TB"
+                    )
                     filters.append(
-                        f"nullsrc=s={width}x{height}:r={fps:g}:d={source_duration:.6f},format=rgba,"
-                        f"geq=r='if(lte(X,W*({ratio})),{fill[0]},{bg[0]})':"
+                        f"nullsrc=s={width}x{height}:r={fps:g}:d={source_duration:.6f},"
+                        f"format=rgba,geq=r='if(lte(X,W*({ratio})),{fill[0]},{bg[0]})':"
                         f"g='if(lte(X,W*({ratio})),{fill[1]},{bg[1]})':"
                         f"b='if(lte(X,W*({ratio})),{fill[2]},{bg[2]})':a='255',"
-                        f"colorchannelmixer=aa={alpha:.6f}{rotate}{setpts}[{source_label}]"
+                        f"colorchannelmixer=aa={alpha:.6f}{rotate}{setpts}"
+                        f"[{source_label}]"
                     )
                     filters.append(
                         f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
-                        f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=pass:"
-                        f"enable='{source_enable}'[{out_label}]"
+                        f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:"
+                        f"eof_action=pass:enable='{source_enable}'[{out_label}]"
                     )
                     current = out_label
 
@@ -520,7 +724,11 @@ class FFmpegV2Compiler:
                     append_progress_source(duration, 0, enable)
                 else:
                     for event in plan.audio_events:
-                        event_intervals = _intersect_intervals(intervals, event.start_tick, event.end_tick)
+                        event_intervals = _intersect_intervals(
+                            intervals,
+                            event.start_tick,
+                            event.end_tick,
+                        )
                         append_progress_source(
                             ticks_to_seconds(event.end_tick - event.start_tick),
                             event.start_tick,
@@ -535,10 +743,20 @@ class FFmpegV2Compiler:
                 alpha = max(0.0, min(1.0, float(layer.opacity)))
                 fontcolor = _color(props["color"])
                 fontsize = props["font_size"]
-                font_path = str(layer.properties.get("font_path", "") or "").strip()
-                font_prefix = f"fontfile='{_filter_path(Path(font_path))}':" if font_path else ""
+                font_path = str(
+                    layer.properties.get("font_path", "") or ""
+                ).strip()
+                font_prefix = (
+                    f"fontfile='{_filter_path(Path(font_path))}':"
+                    if font_path
+                    else ""
+                )
 
-                def append_time_source(source_tick: int, start_tick: int, source_enable: str) -> None:
+                def append_time_source(
+                    source_tick: int,
+                    start_tick: int,
+                    source_enable: str,
+                ) -> None:
                     nonlocal current, stage
                     source_duration = ticks_to_seconds(source_tick)
                     if source_duration <= 0:
@@ -546,17 +764,21 @@ class FFmpegV2Compiler:
                     source_label = f"songtime{stage}"
                     out_label = f"v{stage}"
                     stage += 1
-                    setpts = "" if start_tick <= 0 else f",setpts=PTS+{ticks_to_seconds(start_tick):.6f}/TB"
+                    setpts = (
+                        ""
+                        if start_tick <= 0
+                        else f",setpts=PTS+{ticks_to_seconds(start_tick):.6f}/TB"
+                    )
                     filters.append(
-                        f"color=c=black@0:s={width}x{height}:r={fps:g}:d={source_duration:.6f},format=rgba,"
-                        f"drawtext={font_prefix}text='{_clock_text(source_tick)}':x=0:y='(h-text_h)/2':"
-                        f"fontsize={fontsize}:fontcolor={fontcolor},colorchannelmixer=aa={alpha:.6f}"
-                        f"{rotate}{setpts}[{source_label}]"
+                        f"color=c=black@0:s={width}x{height}:r={fps:g}:d={source_duration:.6f},"
+                        f"format=rgba,drawtext={font_prefix}text='{_clock_text(source_tick)}':"
+                        f"x=0:y='(h-text_h)/2':fontsize={fontsize}:fontcolor={fontcolor},"
+                        f"colorchannelmixer=aa={alpha:.6f}{rotate}{setpts}[{source_label}]"
                     )
                     filters.append(
                         f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
-                        f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=pass:"
-                        f"enable='{source_enable}'[{out_label}]"
+                        f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:"
+                        f"eof_action=pass:enable='{source_enable}'[{out_label}]"
                     )
                     current = out_label
 
@@ -564,7 +786,11 @@ class FFmpegV2Compiler:
                     append_time_source(resolved.duration_tick, 0, enable)
                 else:
                     for event in plan.audio_events:
-                        event_intervals = _intersect_intervals(intervals, event.start_tick, event.end_tick)
+                        event_intervals = _intersect_intervals(
+                            intervals,
+                            event.start_tick,
+                            event.end_tick,
+                        )
                         append_time_source(
                             event.end_tick - event.start_tick,
                             event.start_tick,
@@ -588,40 +814,65 @@ class FFmpegV2Compiler:
                     mode = "bar" if style == "bars" else "line"
                     fscale = _ffmpeg_scale(props["frequency_scale"])
                     visualizer = (
-                        f"showfreqs=s={width}x{height}:mode={mode}:fscale={fscale}:ascale={ascale}:"
-                        f"colors={color}"
+                        f"showfreqs=s={width}x{height}:mode={mode}:"
+                        f"fscale={fscale}:ascale={ascale}:colors={color}"
                     )
                 else:
-                    split = ":split_channels=1" if style == "stereo_waveform" else ""
-                    visualizer = f"showwaves=s={width}x{height}:mode=line:scale={ascale}:colors={color}{split}"
+                    split = (
+                        ":split_channels=1"
+                        if style == "stereo_waveform"
+                        else ""
+                    )
+                    visualizer = (
+                        f"showwaves=s={width}x{height}:mode=line:scale={ascale}:"
+                        f"colors={color}{split}"
+                    )
                 mirror = ",vflip" if props["mirror"] else ""
                 rotate = _rotation_chain(layer)
                 alpha = max(0.0, min(1.0, float(layer.opacity)))
                 filters.append(
                     f"[{audio_label}]volume={gain:.6f},{visualizer},format=rgba,"
-                    f"colorkey=0x000000:0.08:0.0,colorchannelmixer=aa={alpha:.6f}{mirror}{rotate}[{source_label}]"
+                    f"colorkey=0x000000:0.08:0.0,colorchannelmixer=aa={alpha:.6f}"
+                    f"{mirror}{rotate}[{source_label}]"
                 )
                 filters.append(
                     f"[{current}][{source_label}]overlay=x='{_overlay_position_expr(layer, 'x')}':"
-                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:eof_action=pass:enable='{enable}'[{out}]"
+                    f"y='{_overlay_position_expr(layer, 'y')}':shortest=0:"
+                    f"eof_action=pass:enable='{enable}'[{out}]"
                 )
                 current = out
                 continue
 
             if abs(float(layer.transform.rotation)) > 0.0001:
-                raise RenderCompileError("Rotasi text/judul dinamis belum didukung.")
+                raise RenderCompileError(
+                    "Rotasi text/judul dinamis belum didukung."
+                )
 
             if layer.type == "song_title":
-                template = str(layer.properties.get("template", "{title}\n{artist}"))
-                fontcolor = _color(layer.properties.get("color", "#ffffff"))
+                template = str(
+                    layer.properties.get("template", "{title}\n{artist}")
+                )
+                fontcolor = _color(
+                    layer.properties.get("color", "#ffffff")
+                )
                 fontsize = _font_size(layer, document.canvas.height)
                 for event in plan.audio_events:
-                    event_intervals = _intersect_intervals(intervals, event.start_tick, event.end_tick)
+                    event_intervals = _intersect_intervals(
+                        intervals,
+                        event.start_tick,
+                        event.end_tick,
+                    )
                     if not event_intervals:
                         continue
                     song = songs[event.song_id]
-                    text = dynamic_song_text(template, song.display_title, song.display_artist)
-                    text_path = work / f"song-title-{layer.layer_id}-{event.song_id}.txt"
+                    text = dynamic_song_text(
+                        template,
+                        song.display_title,
+                        song.display_artist,
+                    )
+                    text_path = work / (
+                        f"song-title-{layer.layer_id}-{event.song_id}.txt"
+                    )
                     text_path.write_text(text, encoding="utf-8")
                     text_files.append(text_path)
                     out = f"v{stage}"
@@ -636,10 +887,19 @@ class FFmpegV2Compiler:
                         f"alpha={layer.opacity:.6f}",
                         f"enable='{_escape_enable(event_intervals)}'",
                     ]
-                    font_path = str(layer.properties.get("font_path", "") or "").strip()
+                    font_path = str(
+                        layer.properties.get("font_path", "") or ""
+                    ).strip()
                     if font_path:
-                        parts.insert(0, f"fontfile='{_filter_path(Path(font_path))}'")
-                    filters.append(f"[{current}]drawtext=" + ":".join(parts) + f"[{out}]")
+                        parts.insert(
+                            0,
+                            f"fontfile='{_filter_path(Path(font_path))}'",
+                        )
+                    filters.append(
+                        f"[{current}]drawtext="
+                        + ":".join(parts)
+                        + f"[{out}]"
+                    )
                     current = out
                 continue
 
@@ -661,22 +921,56 @@ class FFmpegV2Compiler:
                 f"alpha={layer.opacity:.6f}",
                 f"enable='{enable}'",
             ]
-            font_path = str(layer.properties.get("font_path", "") or "").strip()
+            font_path = str(
+                layer.properties.get("font_path", "") or ""
+            ).strip()
             if font_path:
-                parts.insert(0, f"fontfile='{_filter_path(Path(font_path))}'")
-            filters.append(f"[{current}]drawtext=" + ":".join(parts) + f"[{out}]")
+                parts.insert(
+                    0,
+                    f"fontfile='{_filter_path(Path(font_path))}'",
+                )
+            filters.append(
+                f"[{current}]drawtext=" + ":".join(parts) + f"[{out}]"
+            )
             current = out
 
         filters.append(f"[{current}]format=yuv420p[vout]")
 
-        args += ["-filter_complex", ";".join(filters), "-map", "[vout]"]
+        args += [
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            "[vout]",
+        ]
         if include_audio:
             args += ["-map", "[aout]"]
-        encoder = "libx265" if document.render_settings.get("codec") == "h265" else "libx264"
-        args += ["-c:v", encoder, "-pix_fmt", "yuv420p", "-r", f"{fps:g}"]
+        encoder = (
+            "libx265"
+            if document.render_settings.get("codec") == "h265"
+            else "libx264"
+        )
+        args += [
+            "-c:v",
+            encoder,
+            "-pix_fmt",
+            "yuv420p",
+            "-r",
+            f"{fps:g}",
+        ]
         if include_audio:
-            args += ["-c:a", "aac", "-b:a", str(document.render_settings.get("audio_bitrate", "320k"))]
-        args += ["-t", f"{duration:.6f}", "-movflags", "+faststart", str(destination)]
+            args += [
+                "-c:a",
+                "aac",
+                "-b:a",
+                str(document.render_settings.get("audio_bitrate", "320k")),
+            ]
+        args += [
+            "-t",
+            f"{duration:.6f}",
+            "-movflags",
+            "+faststart",
+            str(destination),
+        ]
         return CompiledFFmpeg(tuple(args), plan, tuple(text_files))
 
     def compile_frame(
@@ -688,7 +982,12 @@ class FFmpegV2Compiler:
     ) -> CompiledFFmpeg:
         if time_tick < 0:
             raise RenderCompileError("Waktu preview tidak boleh negatif.")
-        compiled = self.compile_video(document, destination, work_dir, include_audio=False)
+        compiled = self.compile_video(
+            document,
+            destination,
+            work_dir,
+            include_audio=False,
+        )
         args = list(compiled.args)
         output = args.pop()
         if "-c:v" in args:
@@ -712,4 +1011,8 @@ class FFmpegV2Compiler:
             "image2",
             output,
         ]
-        return CompiledFFmpeg(tuple(args), compiled.render_plan, compiled.text_files)
+        return CompiledFFmpeg(
+            tuple(args),
+            compiled.render_plan,
+            compiled.text_files,
+        )

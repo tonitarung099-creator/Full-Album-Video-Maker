@@ -28,6 +28,20 @@ from full_album_maker.template_system import (
 )
 
 
+FINAL_TEMPLATE_IDS = [
+    "spotify_clean",
+    "cafe_acoustic",
+    "viral_full_album",
+    "vinyl_nostalgia",
+    "neon_spectrum",
+    "romantic_bokeh",
+    "dark_cinematic",
+    "photo_album",
+    "cassette_retro",
+    "music_channel_pro",
+]
+
+
 def _make_audio(tmp_path: Path, name: str, frequency: int) -> Path:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -86,11 +100,22 @@ def _document(tmp_path: Path) -> ProjectDocument:
     doc.canvas.height = 240
     doc.canvas.background_color = "#10151d"
 
-    for index, (frequency, color) in enumerate(((330, "#d34b55"), (550, "#4cae8a")), start=1):
+    for index, (frequency, color) in enumerate(
+        ((330, "#d34b55"), (550, "#4cae8a")),
+        start=1,
+    ):
         audio_path = _make_audio(tmp_path, f"song-{index}.wav", frequency)
         cover_path = _make_cover(tmp_path, f"cover-{index}.png", color)
-        audio = MediaAsset(kind="audio", locator=str(audio_path), source_duration_tick=seconds_to_tick(0.45))
-        cover = MediaAsset(kind="image", locator=str(cover_path), original_name=cover_path.name)
+        audio = MediaAsset(
+            kind="audio",
+            locator=str(audio_path),
+            source_duration_tick=seconds_to_tick(0.45),
+        )
+        cover = MediaAsset(
+            kind="image",
+            locator=str(cover_path),
+            original_name=cover_path.name,
+        )
         doc.media.extend([audio, cover])
         doc.playlist.entries.append(
             SongInstance(
@@ -110,8 +135,17 @@ def _document(tmp_path: Path) -> ProjectDocument:
             name="Watermark Manual",
             order=50,
             time_binding=TimeBinding(kind="album"),
-            transform=Transform(x=0.80, y=0.03, width=0.16, height=0.05),
-            properties={"text": "MANUAL", "font_size": 14, "color": "#ffffff"},
+            transform=Transform(
+                x=0.80,
+                y=0.03,
+                width=0.16,
+                height=0.05,
+            ),
+            properties={
+                "text": "MANUAL",
+                "font_size": 14,
+                "color": "#ffffff",
+            },
             origin="manual",
         )
     )
@@ -119,10 +153,15 @@ def _document(tmp_path: Path) -> ProjectDocument:
     return doc
 
 
-def test_template_catalog_is_stable_and_each_template_builds_editable_layers(tmp_path: Path):
+def test_template_catalog_is_stable_and_each_template_builds_editable_layers(
+    tmp_path: Path,
+):
     doc = _document(tmp_path)
-    assert [item.template_id for item in template_choices()] == list(TEMPLATES)
-    expected_types = {
+    assert [item.template_id for item in template_choices()] == FINAL_TEMPLATE_IDS
+    assert list(TEMPLATES) == FINAL_TEMPLATE_IDS
+    assert len(TEMPLATES) == 10
+    required_types = {
+        "background",
         "song_cover",
         "vinyl",
         "playlist_visual",
@@ -133,36 +172,83 @@ def test_template_catalog_is_stable_and_each_template_builds_editable_layers(tmp
     }
     for template_id in TEMPLATES:
         layers = build_template_layers(doc, template_id)
-        assert len(layers) == 7
-        assert {layer.type for layer in layers} == expected_types
+        assert required_types.issubset({layer.type for layer in layers})
+        assert len({layer.layer_id for layer in layers}) == len(layers)
         assert all(layer.origin == "template" for layer in layers)
-        assert all(layer.properties.get("template_id") == template_id for layer in layers)
-        assert all(layer.transform.width >= 0.02 and layer.transform.height >= 0.02 for layer in layers)
+        assert all(
+            layer.properties.get("template_id") == template_id
+            for layer in layers
+        )
+        assert all(
+            layer.transform.width >= 0.02
+            and layer.transform.height >= 0.02
+            for layer in layers
+        )
 
 
-def test_apply_template_preserves_manual_layers_replaces_previous_template_and_undoes_once(tmp_path: Path):
+def test_legacy_minimal_spectrum_remains_loadable_but_is_not_public_catalog(
+    tmp_path: Path,
+):
+    doc = _document(tmp_path)
+    assert "minimal_spectrum" not in TEMPLATES
+    assert all(
+        item.template_id != "minimal_spectrum"
+        for item in template_choices()
+    )
+    layers = build_template_layers(doc, "minimal_spectrum")
+    assert layers
+    assert all(
+        layer.properties.get("template_id") == "minimal_spectrum"
+        for layer in layers
+    )
+
+
+def test_apply_template_preserves_manual_layers_replaces_previous_template_and_undoes_once(
+    tmp_path: Path,
+):
     doc = _document(tmp_path)
     manual_id = doc.layers[0].layer_id
     controller = EditorController(doc)
 
-    controller.dispatch(apply_template_command(controller.snapshot(), "spotify_clean"))
+    spotify_expected = len(build_template_layers(doc, "spotify_clean"))
+    controller.dispatch(
+        apply_template_command(controller.snapshot(), "spotify_clean")
+    )
     spotify = controller.snapshot()
     assert current_template_id(spotify) == "spotify_clean"
     assert manual_id in spotify.layer_map()
-    assert len([layer for layer in spotify.layers if layer.origin == "template"]) == 7
+    assert (
+        len([layer for layer in spotify.layers if layer.origin == "template"])
+        == spotify_expected
+    )
 
-    controller.dispatch(apply_template_command(controller.snapshot(), "vinyl_nostalgia"))
+    nostalgia_expected = len(
+        build_template_layers(controller.snapshot(), "vinyl_nostalgia")
+    )
+    controller.dispatch(
+        apply_template_command(controller.snapshot(), "vinyl_nostalgia")
+    )
     nostalgia = controller.snapshot()
     assert current_template_id(nostalgia) == "vinyl_nostalgia"
     assert manual_id in nostalgia.layer_map()
-    assert len([layer for layer in nostalgia.layers if layer.origin == "template"]) == 7
-    assert all(layer.properties.get("template_id") == "vinyl_nostalgia" for layer in nostalgia.layers if layer.origin == "template")
+    assert (
+        len([layer for layer in nostalgia.layers if layer.origin == "template"])
+        == nostalgia_expected
+    )
+    assert all(
+        layer.properties.get("template_id") == "vinyl_nostalgia"
+        for layer in nostalgia.layers
+        if layer.origin == "template"
+    )
 
     controller.undo()
     restored = controller.snapshot()
     assert current_template_id(restored) == "spotify_clean"
     assert manual_id in restored.layer_map()
-    assert len([layer for layer in restored.layers if layer.origin == "template"]) == 7
+    assert (
+        len([layer for layer in restored.layers if layer.origin == "template"])
+        == spotify_expected
+    )
 
     controller.undo()
     original = controller.snapshot()
@@ -170,19 +256,30 @@ def test_apply_template_preserves_manual_layers_replaces_previous_template_and_u
     assert [layer.layer_id for layer in original.layers] == [manual_id]
 
 
-def test_responsive_workspace_exposes_and_applies_template_selector(tmp_path: Path):
+def test_responsive_workspace_exposes_and_applies_final_template_selector(
+    tmp_path: Path,
+):
     app = QApplication.instance() or QApplication([])
     workspace = ResponsiveEditorWorkspace(_document(tmp_path))
     try:
-        assert workspace.template_combo.count() == 4
-        index = workspace.template_combo.findData("minimal_spectrum")
+        assert workspace.template_combo.count() == 10
+        assert workspace.template_combo.findData("minimal_spectrum") < 0
+        index = workspace.template_combo.findData("neon_spectrum")
         assert index >= 0
         workspace.template_combo.setCurrentIndex(index)
         workspace._apply_template_s07()
         doc = workspace.document()
-        assert current_template_id(doc) == "minimal_spectrum"
-        assert len([layer for layer in doc.layers if layer.origin == "template"]) == 7
-        assert any(layer.origin == "manual" and layer.name == "Watermark Manual" for layer in doc.layers)
+        assert current_template_id(doc) == "neon_spectrum"
+        assert any(
+            layer.origin == "template"
+            and layer.properties.get("effect_preset") == "particles"
+            for layer in doc.layers
+        )
+        assert any(
+            layer.origin == "manual"
+            and layer.name == "Watermark Manual"
+            for layer in doc.layers
+        )
         assert workspace.session.can_undo
     finally:
         workspace.close()
@@ -191,7 +288,10 @@ def test_responsive_workspace_exposes_and_applies_template_selector(tmp_path: Pa
 
 
 @pytest.mark.parametrize("template_id", list(TEMPLATES))
-def test_each_s07_template_real_ffmpeg_render(tmp_path: Path, template_id: str):
+def test_each_builtin_template_real_ffmpeg_render(
+    tmp_path: Path,
+    template_id: str,
+):
     ffmpeg = shutil.which("ffmpeg")
     ffprobe = shutil.which("ffprobe")
     if not ffmpeg or not ffprobe:
@@ -199,7 +299,9 @@ def test_each_s07_template_real_ffmpeg_render(tmp_path: Path, template_id: str):
 
     doc = _document(tmp_path)
     controller = EditorController(doc)
-    controller.dispatch(apply_template_command(controller.snapshot(), template_id))
+    controller.dispatch(
+        apply_template_command(controller.snapshot(), template_id)
+    )
     rendered_doc = controller.snapshot()
 
     output = tmp_path / f"{template_id}.mp4"
@@ -208,7 +310,12 @@ def test_each_s07_template_real_ffmpeg_render(tmp_path: Path, template_id: str):
         output,
         tmp_path / f"work-{template_id}",
     )
-    subprocess.run(compiled.args, check=True, capture_output=True, text=True)
+    subprocess.run(
+        compiled.args,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     assert output.exists() and output.stat().st_size > 0
 
     probe = subprocess.run(
