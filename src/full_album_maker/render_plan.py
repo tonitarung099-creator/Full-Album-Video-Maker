@@ -7,7 +7,7 @@ from .editor_models import ProjectDocument
 from .timeline_resolver import ResolvedTimeline, TimelineResolver
 
 RENDER_PLAN_FORMAT = "full-album-maker-render-plan"
-RENDER_PLAN_VERSION = 2
+RENDER_PLAN_VERSION = 1
 
 
 @dataclass(frozen=True)
