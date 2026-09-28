@@ -7,6 +7,7 @@ import subprocess
 
 from PIL import Image, ImageStat
 import pytest
+from PySide6.QtWidgets import QApplication
 
 from full_album_maker.editor_models import (
     Layer,
@@ -24,6 +25,7 @@ from full_album_maker.overlay_effects import (
     normalize_effect_properties,
 )
 from full_album_maker.render_graph import FFmpegV2Compiler
+from full_album_maker.s10_workspace import S10EditorWorkspace
 from full_album_maker.spectrum_feature import SPECTRUM_PRESETS
 from full_album_maker.template_system import TEMPLATES, build_template_layers
 from full_album_maker.template_thumbnail import render_template_thumbnail
@@ -265,3 +267,33 @@ def test_effect_layer_properties_remain_serializable_and_editable(
     clone.validate()
     assert clone.properties["seed"] == particles.properties["seed"]
     assert clone.opacity != particles.opacity
+
+
+def test_s10_workspace_exposes_actual_render_preview_card_without_blocking_tests(
+    tmp_path: Path,
+):
+    app = QApplication.instance() or QApplication([])
+    workspace = S10EditorWorkspace(
+        _document(tmp_path / "ui-card"),
+        template_preview_enabled=False,
+    )
+    try:
+        assert workspace.template_preview_card_s10 is not None
+        assert workspace.template_preview_image_s10.size().width() == 160
+        assert workspace.template_preview_image_s10.size().height() == 90
+        assert workspace.template_combo.count() == 10
+        first_id = str(workspace.template_combo.currentData() or "")
+        assert first_id == "spotify_clean"
+        assert workspace.template_preview_title_s10.text() == "Spotify Clean"
+        assert "dinonaktifkan" in workspace.template_preview_status_s10.text().casefold()
+
+        neon_index = workspace.template_combo.findData("neon_spectrum")
+        assert neon_index >= 0
+        workspace.template_combo.setCurrentIndex(neon_index)
+        app.processEvents()
+        assert workspace.template_preview_title_s10.text() == "Neon Spectrum"
+        assert "glow" in workspace.template_preview_description_s10.text().casefold()
+    finally:
+        workspace.close()
+        workspace.deleteLater()
+        app.processEvents()
