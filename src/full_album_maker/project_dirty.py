@@ -6,7 +6,7 @@ from typing import Any
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-from . import ui as ui_module
+from . import __version__, ui as ui_module
 from .paths import output_dir
 from .project_io import save_project
 
@@ -35,7 +35,7 @@ def _is_project_dirty(self) -> bool:
 
 
 def _update_window_title(self) -> None:
-    name = "Full Album Maker"
+    name = f"Full Album Maker v{__version__}"
     current_path = str(getattr(self, "_current_project_path", "") or "")
     if current_path:
         name += f" — {Path(current_path).name}"

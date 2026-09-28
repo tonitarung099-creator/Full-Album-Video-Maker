@@ -11,7 +11,7 @@ jobs:
   build:
     runs-on: windows-2025
     permissions:
-      contents: read
+      contents: write
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -19,6 +19,18 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12.10"
+
+      - name: Resolve stable application version
+        shell: pwsh
+        run: |
+          $version = python -c "import sys; sys.path.insert(0, 'src'); import full_album_maker; print(full_album_maker.__version__)"
+          if ($LASTEXITCODE -ne 0) { throw "Tidak dapat membaca versi aplikasi." }
+          $version = $version.Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Versi release harus semantic version stabil, contoh 1.0.0. Ditemukan: $version"
+          }
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "RELEASE_ZIP=Full-Album-Maker-v$version-Windows-Portable.zip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install pinned Python build dependencies
         shell: pwsh
@@ -110,10 +122,11 @@ jobs:
           New-Item -ItemType Directory -Force "dist\Full Album Maker\output" | Out-Null
           python build/write_release_capabilities.py --root "dist\Full Album Maker"
 
-      - name: Create portable ZIP
+      - name: Create versioned portable ZIP
         shell: pwsh
         run: |
-          Compress-Archive -Path "dist\Full Album Maker" -DestinationPath "Full-Album-Maker-Windows-Portable.zip"
+          Compress-Archive -Path "dist\Full Album Maker" -DestinationPath $env:RELEASE_ZIP
+          if (-not (Test-Path $env:RELEASE_ZIP)) { throw "Portable ZIP versi tidak berhasil dibuat." }
 
       - name: Smoke extracted portable ZIP without global Python, FFmpeg, or API key
         shell: pwsh
@@ -121,7 +134,7 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           $extractRoot = Join-Path $PWD "portable smoke – O'Brien"
-          Expand-Archive "Full-Album-Maker-Windows-Portable.zip" -DestinationPath $extractRoot
+          Expand-Archive $env:RELEASE_ZIP -DestinationPath $extractRoot
           $app = Get-ChildItem $extractRoot -Recurse -Filter "Full Album Maker.exe" | Select-Object -First 1
           if (-not $app) { throw "EXE portable tidak ditemukan setelah extract." }
 
@@ -134,15 +147,12 @@ jobs:
             $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
 
             if (Get-Command python -ErrorAction SilentlyContinue) {
-              throw "Gate S12 gagal mengisolasi Python global."
+              throw "Gate release gagal mengisolasi Python global."
             }
             if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
-              throw "Gate S12 gagal mengisolasi FFmpeg global."
+              throw "Gate release gagal mengisolasi FFmpeg global."
             }
 
-            # Full Album Maker is a Windows GUI subsystem EXE. PowerShell's call
-            # operator does not reliably populate $LASTEXITCODE for that process,
-            # so explicitly wait and read the process ExitCode.
             $smokeProcess = Start-Process -FilePath $app.FullName -ArgumentList "--portable-smoke" -Wait -PassThru
             if ($smokeProcess.ExitCode -ne 0) {
               throw "Portable smoke keluar dengan kode $($smokeProcess.ExitCode)."
@@ -162,9 +172,35 @@ jobs:
           if ($smoke.output_streams -notcontains "audio" -or $smoke.output_streams -notcontains "video") {
             throw "Portable smoke output belum terverifikasi audio+video."
           }
+          if ($smoke.gui_title -notlike "*v$env:APP_VERSION*") {
+            throw "GUI portable tidak menampilkan versi release $env:APP_VERSION. Title: $($smoke.gui_title)"
+          }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: Full-Album-Maker-Windows-Portable
-          path: Full-Album-Maker-Windows-Portable.zip
+          path: Full-Album-Maker-v*-Windows-Portable.zip
           if-no-files-found: error
+
+      - name: Publish stable GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:APP_VERSION"
+          $notes = "docs/RELEASE_NOTES_$tag.md"
+          if (-not (Test-Path $notes)) {
+            throw "Release notes tidak ditemukan: $notes"
+          }
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag sudah ada; publikasi dilewati."
+            exit 0
+          }
+
+          gh release create $tag $env:RELEASE_ZIP --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title "Full Album Maker $tag" --notes-file $notes --latest
+          if ($LASTEXITCODE -ne 0) {
+            throw "Gagal membuat GitHub Release $tag."
+          }
