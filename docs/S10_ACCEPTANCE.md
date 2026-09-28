@@ -39,9 +39,13 @@ Core tetap memakai FFmpeg `showfreqs` / `showwaves`; tidak ada kontrol FFT/circu
 
 Semua effect memakai properties tervalidasi (`intensity`, `speed`, `count`, `seed`, `color`). `count` dibatasi maksimal 12 dan seed disimpan di project agar Preview Akurat dan final render deterministik. Effect memakai source RGBA transparan dan normal alpha overlay; tidak ada frame hitam sebagai pseudo-transparency.
 
-## Thumbnail
+Effect prosedural dengan `mode=effect` juga dianggap portabel oleh template kustom S08: properties dinormalisasi dan seed dipertahankan tanpa asset/path eksternal. Background `mode=asset` tetap ditolak agar ekspor template tidak membawa referensi project yang stale.
+
+## Thumbnail dan preview card
 
 `render_template_thumbnail()` membuat clone project, menerapkan template pada clone, memilih frame di tengah lagu pertama, lalu memakai `FFmpegV2Compiler.compile_frame()` yang sama dengan Preview Akurat/final render. Source project tidak boleh berubah.
+
+`S10EditorWorkspace` menampilkan card preview 16:9 untuk template built-in yang sedang dipilih. Render card berjalan asynchronous, cache-key memakai content signature proyek + template ID, dan hasil thread yang stale diabaikan bila pilihan sudah berubah. Jika belum ada lagu, UI meminta pengguna menambahkan lagu; template kustom tetap memakai Preview Akurat setelah apply.
 
 ## Circular Spectrum
 
@@ -61,8 +65,11 @@ Tidak ada preset bernama circular di registry aktif.
 - semua template schema/layer valid dan manual layer tetap dipertahankan saat apply/undo;
 - semua 10 template real FFmpeg render menghasilkan video + audio;
 - semua 10 template menghasilkan PNG thumbnail via compiler aktual;
+- preview card S10 terpasang dan mengikuti template terpilih tanpa memaksa FFmpeg di UI unit test;
 - glow/light leak/particles dirender pada canvas terang dan tidak boleh menjadi opaque black box;
 - effect unknown/unbounded ditolak;
+- procedural effect bertahan pada custom-template roundtrip tanpa asset eksternal;
+- background image/video project-specific tetap ditolak dari template kustom portabel;
 - Circular Spectrum explicit deferred;
 - seluruh regression S01–S09 tetap hijau;
 - Windows PyInstaller onedir + portable ZIP tetap hijau.
