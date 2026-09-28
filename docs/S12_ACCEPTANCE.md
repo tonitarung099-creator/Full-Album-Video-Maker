@@ -13,7 +13,7 @@ Yang wajib dibuktikan untuk mode Packed dan Free:
 - durasi resolved tepat 3 jam;
 - resolver Free tidak kembali ke scan overlap O(n²);
 - render plan/graph dapat dikompilasi tanpa membuat output 3 jam;
-- filter graph panjang dipindahkan ke `-filter_complex_script`;
+- filter graph panjang dipindahkan ke file melalui sintaks FFmpeg `-/filter_complex`;
 - command line Windows hasil compile berada di bawah guard S12;
 - Packed masih memakai concat audio rapat;
 - Free masih memakai silence base + explicit mix/crossfade contract S11.
@@ -26,7 +26,7 @@ guard, bukan benchmark hardware CI yang rapuh.
 Selain stress compile 3 jam, suite wajib melakukan render pendek dengan FFmpeg
 nyata untuk membuktikan:
 
-- `-filter_complex_script` diterima oleh binary FFmpeg yang dipin;
+- sintaks option-file `-/filter_complex` diterima oleh binary FFmpeg yang dipin;
 - regression render S01–S11 tetap lulus;
 - Free Timeline gap/silence/crossfade/spectrum parity tetap lulus.
 
@@ -88,7 +88,7 @@ S12 baru boleh merge bila exact head SHA PR memenuhi seluruh berikut:
 
 - seluruh pytest hijau;
 - gate 200 lagu/3 jam Packed + Free hijau;
-- real FFmpeg external-filter-script hijau;
+- real FFmpeg option-file filter graph hijau;
 - semua regression S01–S11 hijau;
 - PyInstaller onedir hijau;
 - portable ZIP berhasil dibuat;
