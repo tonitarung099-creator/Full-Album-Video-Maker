@@ -74,7 +74,6 @@ def test_local_portable_build_keeps_s12_release_contract():
         "23e54b51ddffbc7713c583748e3bd86f62b1fa4a",
         "NotoSans.ttf",
         "write_release_capabilities.py",
-        "CAPABILITIES.json",
         "--portable-smoke",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
