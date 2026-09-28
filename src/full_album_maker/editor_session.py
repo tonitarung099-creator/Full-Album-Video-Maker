@@ -89,9 +89,7 @@ class EditorSession:
         return self.controller.snapshot()
 
     def set_document(self, document: ProjectDocument, *, mark_saved: bool = True) -> None:
-        self.controller = EditorController(document)
-        if not mark_saved:
-            pass
+        self.controller = EditorController(document, mark_saved=mark_saved)
         self.selected_layer_ids = []
         self.playhead_tick = 0
 
