@@ -31,8 +31,6 @@ def _is_project_dirty(self) -> bool:
     try:
         return _project_state(self.project) != saved
     except Exception:
-        # If serialization itself becomes invalid, treat it as unsaved instead
-        # of silently allowing destructive close/open operations.
         return True
 
 
@@ -47,7 +45,6 @@ def _update_window_title(self) -> None:
 
 
 def _patched_init(self, *args, **kwargs) -> None:
-    # refresh() can be called by lower layers while __init__ is still running.
     self._saved_project_state = None
     self._current_project_path = ""
     _originals["ui_init"](self, *args, **kwargs)
@@ -76,16 +73,18 @@ def _patched_save_project_file(self) -> bool:
         return False
 
     try:
-        save_project(path, self.project)
+        saved = save_project(path, self.project)
     except Exception as exc:
         self._error(f"Gagal menyimpan proyek: {exc}")
         return False
 
-    self._current_project_path = path
+    # save_project() canonicalizes the suffix. Keep title/log/default path pointed
+    # at the file that actually exists rather than the raw native-dialog string.
+    self._current_project_path = saved
     self._saved_project_state = _project_state(self.project)
     self.refresh()
     if hasattr(self, "log"):
-        self.log.appendPlainText(f"Proyek disimpan: {path}")
+        self.log.appendPlainText(f"Proyek disimpan: {saved}")
     return True
 
 
@@ -123,9 +122,6 @@ def _patched_load_project_file(self) -> bool:
     if self.project is previous_project:
         return False
 
-    # The lower UI layer owns the file dialog, so this wrapper may not know the
-    # selected path. The loaded content itself is nevertheless the new clean
-    # baseline; Save keeps its existing Save-As behavior.
     self._current_project_path = ""
     self._saved_project_state = _project_state(self.project)
     self.refresh()
@@ -133,8 +129,6 @@ def _patched_load_project_file(self) -> bool:
 
 
 def _patched_close_event(self, event) -> None:
-    # Render lifecycle owns the first stage of close: it must terminate/wait for
-    # FFmpeg before any project-discard decision can actually close the process.
     if getattr(self, "render_busy", False):
         _originals["close_event"](self, event)
         return
