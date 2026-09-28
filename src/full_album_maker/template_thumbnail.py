@@ -8,7 +8,7 @@ import tempfile
 from .editor_controller import EditorController
 from .editor_models import ProjectDocument
 from .paths import ffmpeg_path
-from .render_graph import FFmpegV2Compiler
+from .s11_render_graph import S11FFmpegCompiler
 from .template_system import apply_template_command, template_definition
 from .timeline_resolver import TimelineResolver
 
@@ -18,11 +18,7 @@ class TemplateThumbnailError(RuntimeError):
 
 
 def template_thumbnail_tick(document: ProjectDocument) -> int:
-    """Pick a stable frame inside the first active song.
-
-    The timestamp is derived from the resolved project rather than a magic wall
-    clock time, so short test songs and real multi-minute tracks both work.
-    """
+    """Pick a stable frame inside the first active song."""
     resolved = TimelineResolver().resolve(document)
     if resolved.errors or not resolved.songs:
         raise TemplateThumbnailError("Thumbnail template membutuhkan minimal satu lagu aktif.")
@@ -45,11 +41,7 @@ def render_template_thumbnail(
     *,
     ffmpeg: str | None = None,
 ) -> str:
-    """Render a PNG through the exact accurate-preview/final compiler.
-
-    The source document is never mutated. Publication uses os.replace on the
-    destination filesystem so a failed preview cannot leave a half-written card.
-    """
+    """Render a PNG through the same S11 accurate-preview/final compiler."""
     executable = ffmpeg or ffmpeg_path()
     if not executable:
         raise TemplateThumbnailError("FFmpeg tidak ditemukan untuk thumbnail template.")
@@ -71,7 +63,7 @@ def render_template_thumbnail(
             prefix=f".{dest.stem}.template-work-",
             dir=dest.parent,
         ) as work:
-            compiled = FFmpegV2Compiler(executable).compile_frame(
+            compiled = S11FFmpegCompiler(executable).compile_frame(
                 snapshot,
                 tick,
                 stage,
@@ -85,7 +77,9 @@ def render_template_thumbnail(
                 errors="replace",
             )
             if completed.returncode != 0:
-                tail = "\n".join((completed.stderr or completed.stdout or "").splitlines()[-8:])
+                tail = "\n".join(
+                    (completed.stderr or completed.stdout or "").splitlines()[-8:]
+                )
                 raise TemplateThumbnailError(
                     "Render thumbnail template gagal."
                     + (f"\n{tail}" if tail else "")

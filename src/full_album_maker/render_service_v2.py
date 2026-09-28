@@ -11,8 +11,9 @@ from typing import Callable
 from .atomic_io import atomic_write_text
 from .editor_models import ProjectDocument
 from .paths import ffmpeg_path, output_dir
-from .render_graph import FFmpegV2Compiler, RenderCompileError
+from .render_graph import RenderCompileError
 from .render_plan import RenderPlan
+from .s11_render_graph import S11FFmpegCompiler
 
 
 class RenderErrorV2(RuntimeError):
@@ -161,16 +162,12 @@ class EditorRenderService:
         timeline = dest.with_name(f"{dest.stem}_Timeline_Final.json")
         stages: list[Path] = [staged]
         try:
-            # Keep all transaction staging on the destination filesystem. Windows
-            # os.replace cannot atomically move a sidecar from e.g. portable app D:
-            # to an output folder on C:. A hidden work directory beside the output
-            # preserves same-filesystem atomic publication and is removed afterward.
             with tempfile.TemporaryDirectory(
                 prefix=f".{dest.stem}.fam-v2-",
                 dir=dest.parent,
             ) as folder:
                 work = Path(folder)
-                compiled = FFmpegV2Compiler(self.ffmpeg).compile_video(
+                compiled = S11FFmpegCompiler(self.ffmpeg).compile_video(
                     snapshot,
                     staged,
                     work,

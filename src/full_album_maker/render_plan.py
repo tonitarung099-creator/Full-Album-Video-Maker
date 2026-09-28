@@ -7,7 +7,7 @@ from .editor_models import ProjectDocument
 from .timeline_resolver import ResolvedTimeline, TimelineResolver
 
 RENDER_PLAN_FORMAT = "full-album-maker-render-plan"
-RENDER_PLAN_VERSION = 2
+RENDER_PLAN_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,8 @@ class RenderAudioEvent:
     source_out_tick: int
     start_tick: int
     end_tick: int
+    gain: float
+    crossfade_in_tick: int
 
 
 @dataclass(frozen=True)
@@ -62,7 +64,10 @@ class RenderPlan:
         }
 
 
-def compile_render_plan(document: ProjectDocument, resolved: ResolvedTimeline | None = None) -> RenderPlan:
+def compile_render_plan(
+    document: ProjectDocument,
+    resolved: ResolvedTimeline | None = None,
+) -> RenderPlan:
     document.validate()
     resolved = resolved or TimelineResolver().resolve(document)
     if resolved.errors:
@@ -73,7 +78,11 @@ def compile_render_plan(document: ProjectDocument, resolved: ResolvedTimeline | 
     for event in resolved.songs:
         song = songs[event.song_id]
         asset = assets[event.asset_id]
-        source_out = song.source_out_tick if song.source_out_tick is not None else asset.source_duration_tick
+        source_out = (
+            song.source_out_tick
+            if song.source_out_tick is not None
+            else asset.source_duration_tick
+        )
         audio_events.append(
             RenderAudioEvent(
                 song_id=event.song_id,
@@ -82,6 +91,12 @@ def compile_render_plan(document: ProjectDocument, resolved: ResolvedTimeline | 
                 source_out_tick=source_out,
                 start_tick=event.start_tick,
                 end_tick=event.end_tick,
+                gain=float(song.gain),
+                crossfade_in_tick=(
+                    int(song.crossfade_in_tick)
+                    if document.playlist.mode == "free"
+                    else 0
+                ),
             )
         )
     layers = document.layer_map()

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from .atomic_io import atomic_write_text
+from .editor_models import ProjectDocument
 from .project import Project
 
 
@@ -21,3 +22,17 @@ def load_project(path: str) -> Project:
     if not isinstance(data, dict):
         raise ValueError("Format file proyek tidak valid.")
     return Project.from_dict(data)
+
+
+def dumps_project_document(project: ProjectDocument) -> str:
+    """Serialize editor-v2 ProjectDocument without touching the filesystem."""
+    project.validate()
+    return json.dumps(project.to_dict(), ensure_ascii=False, sort_keys=True)
+
+
+def loads_project_document(payload: str) -> ProjectDocument:
+    """Deserialize an editor-v2 ProjectDocument from an in-memory JSON string."""
+    data = json.loads(str(payload))
+    if not isinstance(data, dict):
+        raise ValueError("Format ProjectDocument tidak valid.")
+    return ProjectDocument.from_dict(data)
