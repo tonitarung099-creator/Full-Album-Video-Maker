@@ -19,19 +19,14 @@ from .editor_controller import RevisionConflict
 from .editor_models import ProjectDocument
 from .gemini_agent import GeminiAgent
 from .legacy_sync_v2 import sync_legacy_media
-from .responsive_workspace import ResponsiveEditorWorkspace
+from .s10_workspace import S10EditorWorkspace
 from .style import APP_STYLE
 from .template_system import template_choices
 from .ui import MainWindow as LegacyMainWindow
 
 
 class EditorMainWindow(LegacyMainWindow):
-    """Main application shell with the explicit editor-v2 workspace.
-
-    The existing media and Gemini panels remain. S09 routes Gemini through a
-    bounded v2 context and one transactional EditorController batch; legacy state
-    is never mutated by editor-v2 intents.
-    """
+    """Main application shell with editor-v2, AI intents, and S10 template previews."""
 
     def __init__(self) -> None:
         self._editor_workspace_ready = False
@@ -45,9 +40,11 @@ class EditorMainWindow(LegacyMainWindow):
 
         seed = ProjectDocument.new_empty("Editor Full Album")
         seed, _ = sync_legacy_media(seed, self.project)
-        self.editor_workspace = ResponsiveEditorWorkspace(seed, self.splitter)
+        self.editor_workspace = S10EditorWorkspace(seed, self.splitter)
         self.editor_workspace.statusMessage.connect(self._on_editor_status)
-        self.editor_workspace.dirtyChanged.connect(lambda _: self._update_editor_title())
+        self.editor_workspace.dirtyChanged.connect(
+            lambda _: self._update_editor_title()
+        )
 
         self._legacy_center = self.splitter.widget(1)
         self._legacy_center.hide()
@@ -62,13 +59,17 @@ class EditorMainWindow(LegacyMainWindow):
         self._editor_workspace_ready = True
         self._update_editor_title()
         self.chat.appendPlainText(
-            "\n[EDITOR V2]\nGemini sekarang dapat mengedit layer, playlist, spectrum, cover, progress, dan template. "
-            "Semua aksi divalidasi lokal dan satu batch dapat di-Undo sekali.\n"
+            "\n[EDITOR V2]\nGemini dapat mengedit layer, playlist, spectrum, cover, progress, dan template. "
+            "S10 menambahkan 10 template final serta preview card dari render aktual. "
+            "Semua aksi AI tetap divalidasi lokal dan satu batch dapat di-Undo sekali.\n"
         )
 
     def _ensure_ai_executor(self) -> AIEditorExecutor:
         controller = self.editor_workspace.session.controller
-        if self._ai_editor_executor is None or self._ai_editor_executor.controller is not controller:
+        if (
+            self._ai_editor_executor is None
+            or self._ai_editor_executor.controller is not controller
+        ):
             self._ai_editor_executor = AIEditorExecutor(
                 controller,
                 template_store=self.editor_workspace.custom_template_store,
@@ -96,7 +97,11 @@ class EditorMainWindow(LegacyMainWindow):
         model = self.model.currentData() or "gemini-3.8-flash"
         snapshot = self.editor_workspace.session.snapshot()
         request_id = uuid4().hex
-        self._ai_pending[request_id] = (snapshot.project_id, snapshot.revision, text)
+        self._ai_pending[request_id] = (
+            snapshot.project_id,
+            snapshot.revision,
+            text,
+        )
         while len(self._ai_pending) > 64:
             self._ai_pending.pop(next(iter(self._ai_pending)))
 
@@ -180,7 +185,6 @@ class EditorMainWindow(LegacyMainWindow):
                 + "\n".join(lines)
                 + "\nTidak ada perubahan diterapkan. Sebutkan kandidat yang dipilih lalu kirim ulang.\n"
             )
-            # Keep the original instruction visible so the user can add the chosen ID/name.
             try:
                 self.prompt.setPlainText(original_text)
             except Exception:
@@ -207,7 +211,9 @@ class EditorMainWindow(LegacyMainWindow):
                 self.editor_workspace.set_document(document)
                 self._ai_editor_executor = None
                 self._legacy_project_identity = identity
-                self._on_editor_status("Proyek legacy baru dimuat ke editor v2 tanpa menimpa file sumber.")
+                self._on_editor_status(
+                    "Proyek legacy baru dimuat ke editor v2 tanpa menimpa file sumber."
+                )
             else:
                 current = self.editor_workspace.document()
                 merged, changed = sync_legacy_media(current, self.project)
@@ -229,8 +235,14 @@ class EditorMainWindow(LegacyMainWindow):
                 pass
 
     def _update_editor_title(self) -> None:
-        title = self.windowTitle().replace(" • Editor V2 *", "").replace(" • Editor V2", "")
-        suffix = " • Editor V2 *" if self.editor_workspace.session.is_dirty else " • Editor V2"
+        title = self.windowTitle().replace(" • Editor V2 *", "").replace(
+            " • Editor V2", ""
+        )
+        suffix = (
+            " • Editor V2 *"
+            if self.editor_workspace.session.is_dirty
+            else " • Editor V2"
+        )
         self.setWindowTitle(title + suffix)
 
     def closeEvent(self, event) -> None:
@@ -256,7 +268,10 @@ class EditorMainWindow(LegacyMainWindow):
                 if answer == QMessageBox.StandardButton.Cancel:
                     event.ignore()
                     return
-                if answer == QMessageBox.StandardButton.Save and not self.editor_workspace.save_project():
+                if (
+                    answer == QMessageBox.StandardButton.Save
+                    and not self.editor_workspace.save_project()
+                ):
                     event.ignore()
                     return
         super().closeEvent(event)
