@@ -9,28 +9,36 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2025
     permissions:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: "3.12"
+          python-version: "3.12.10"
 
-      - name: Install Python dependencies
+      - name: Install pinned Python build dependencies
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
+          python -m pip install pip==26.2.1
+          python -m pip install -r build/requirements-windows.lock
 
-      - name: Download GPL FFmpeg with libx264 and libx265
+      - name: Download pinned FFmpeg and portable font assets
         shell: pwsh
         run: |
-          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip"
-          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip
+          # BtbN release 397659030 / asset 592976307, observed 2026-09-27.
+          # The upstream convenience URL contains "latest", therefore the digest
+          # below is the authority: a changed upstream asset fails the build.
+          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip"
+          $ffmpegSha256 = "b745ed683204c8e154d627bf75f2e530b7b2eec51d14fabdc8771912423ba67e"
+          Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip
+          $actual = (Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $ffmpegSha256) {
+            throw "Digest FFmpeg berubah. Expected $ffmpegSha256, got $actual. Update pin secara eksplisit."
+          }
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_unpack
 
           $ffmpeg = Get-ChildItem ffmpeg_unpack -Recurse -Filter ffmpeg.exe | Select-Object -First 1
@@ -48,7 +56,16 @@ jobs:
           if ($encoders -notmatch "libx264") { throw "FFmpeg build tidak memiliki libx264." }
           if ($encoders -notmatch "libx265") { throw "FFmpeg build tidak memiliki libx265." }
 
-      - name: Run unit and real FFmpeg render tests
+          # Google Fonts commit is immutable and recorded in CAPABILITIES.json.
+          $fontCommit = "23e54b51ddffbc7713c583748e3bd86f62b1fa4a"
+          New-Item -ItemType Directory -Force "assets\fonts" | Out-Null
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/google/fonts/$fontCommit/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf" -OutFile "assets\fonts\NotoSans.ttf"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/google/fonts/$fontCommit/ofl/notosans/OFL.txt" -OutFile "assets\fonts\NotoSans-OFL.txt"
+          if ((Get-Item "assets\fonts\NotoSans.ttf").Length -lt 1000000) {
+            throw "Noto Sans portable tampak tidak lengkap."
+          }
+
+      - name: Run regression, long-project, and real FFmpeg tests
         shell: pwsh
         env:
           QT_QPA_PLATFORM: offscreen
@@ -69,7 +86,7 @@ jobs:
         run: |
           python -m PyInstaller --noconfirm --clean --windowed --onedir --name "Full Album Maker" --icon "$PWD\assets\logo.ico" --paths "$PWD\src" "$PWD\src\full_album_maker\main.py"
 
-      - name: Bundle FFmpeg and notices
+      - name: Bundle FFmpeg, font, assets, notices, and capability report
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force "dist\Full Album Maker\tools\ffmpeg" | Out-Null
@@ -77,8 +94,11 @@ jobs:
           Copy-Item "tools\ffmpeg\ffprobe.exe" "dist\Full Album Maker\tools\ffmpeg\ffprobe.exe"
           Copy-Item LICENSE "dist\Full Album Maker\LICENSE.txt"
           Copy-Item THIRD_PARTY_NOTICES.md "dist\Full Album Maker\THIRD_PARTY_NOTICES.md"
-          New-Item -ItemType Directory -Force "dist\Full Album Maker\assets" | Out-Null
+          New-Item -ItemType Directory -Force "dist\Full Album Maker\assets\fonts" | Out-Null
           Copy-Item "assets\logo.svg" "dist\Full Album Maker\assets\logo.svg"
+          Copy-Item "assets\fonts\fonts.conf" "dist\Full Album Maker\assets\fonts\fonts.conf"
+          Copy-Item "assets\fonts\NotoSans.ttf" "dist\Full Album Maker\assets\fonts\NotoSans.ttf"
+          Copy-Item "assets\fonts\NotoSans-OFL.txt" "dist\Full Album Maker\assets\fonts\NotoSans-OFL.txt"
 
           $ffLicense = Get-ChildItem ffmpeg_unpack -Recurse -File | Where-Object { $_.Name -eq "LICENSE.txt" } | Select-Object -First 1
           $ffReadme = Get-ChildItem ffmpeg_unpack -Recurse -File | Where-Object { $_.Name -eq "README.txt" } | Select-Object -First 1
@@ -88,13 +108,62 @@ jobs:
           New-Item -ItemType Directory -Force "dist\Full Album Maker\data" | Out-Null
           New-Item -ItemType Directory -Force "dist\Full Album Maker\temp" | Out-Null
           New-Item -ItemType Directory -Force "dist\Full Album Maker\output" | Out-Null
+          python build/write_release_capabilities.py --root "dist\Full Album Maker"
 
       - name: Create portable ZIP
         shell: pwsh
         run: |
           Compress-Archive -Path "dist\Full Album Maker" -DestinationPath "Full-Album-Maker-Windows-Portable.zip"
 
-      - uses: actions/upload-artifact@v4
+      - name: Smoke extracted portable ZIP without global Python, FFmpeg, or API key
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $extractRoot = Join-Path $PWD "portable smoke – O'Brien"
+          Expand-Archive "Full-Album-Maker-Windows-Portable.zip" -DestinationPath $extractRoot
+          $app = Get-ChildItem $extractRoot -Recurse -Filter "Full Album Maker.exe" | Select-Object -First 1
+          if (-not $app) { throw "EXE portable tidak ditemukan setelah extract." }
+
+          $oldPath = $env:PATH
+          try {
+            $env:GEMINI_API_KEY = $null
+            $env:GOOGLE_API_KEY = $null
+            $env:PYTHONHOME = $null
+            $env:PYTHONPATH = $null
+            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+
+            if (Get-Command python -ErrorAction SilentlyContinue) {
+              throw "Gate S12 gagal mengisolasi Python global."
+            }
+            if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+              throw "Gate S12 gagal mengisolasi FFmpeg global."
+            }
+
+            # Full Album Maker is a Windows GUI subsystem EXE. PowerShell's call
+            # operator does not reliably populate $LASTEXITCODE for that process,
+            # so explicitly wait and read the process ExitCode.
+            $smokeProcess = Start-Process -FilePath $app.FullName -ArgumentList "--portable-smoke" -Wait -PassThru
+            if ($smokeProcess.ExitCode -ne 0) {
+              throw "Portable smoke keluar dengan kode $($smokeProcess.ExitCode)."
+            }
+          }
+          finally {
+            $env:PATH = $oldPath
+          }
+
+          $smokeReport = Join-Path $app.DirectoryName "temp\portable-smoke.json"
+          if (-not (Test-Path $smokeReport)) { throw "portable-smoke.json tidak dibuat." }
+          Get-Content $smokeReport
+          $smoke = Get-Content $smokeReport -Raw | ConvertFrom-Json
+          if (-not $smoke.ok -or $smoke.api_key_present) {
+            throw "Portable smoke report tidak memenuhi kontrak offline."
+          }
+          if ($smoke.output_streams -notcontains "audio" -or $smoke.output_streams -notcontains "video") {
+            throw "Portable smoke output belum terverifikasi audio+video."
+          }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: Full-Album-Maker-Windows-Portable
           path: Full-Album-Maker-Windows-Portable.zip

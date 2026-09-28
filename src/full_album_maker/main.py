@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from full_album_maker.gemini_schema_compat import install_gemini_schema_compat
 from full_album_maker.playlist_feature import install_feature
 from full_album_maker.playlist_hardening import install_playlist_hardening
@@ -25,10 +27,20 @@ install_render_lifecycle()
 install_project_dirty_state()
 install_async_import()
 
-# Import after installing the legacy compatibility layers so EditorMainWindow
-# inherits the exact proven media/AI behavior while using the explicit v2 center.
-from full_album_maker.editor_window import run
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if "--portable-smoke" in args:
+        from full_album_maker.release_smoke import run_portable_smoke
+
+        return run_portable_smoke()
+
+    # Import after installing the legacy compatibility layers so EditorMainWindow
+    # inherits the exact proven media/AI behavior while using the explicit v2 center.
+    from full_album_maker.editor_window import run
+
+    return run()
 
 
 if __name__ == "__main__":
-    raise SystemExit(run())
+    raise SystemExit(main())
