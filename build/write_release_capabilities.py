@@ -4,6 +4,15 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPO_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from full_album_maker import __version__
 
 
 FFMPEG = {
@@ -44,6 +53,8 @@ def main() -> int:
     payload = {
         "format": "full-album-maker-capability-report",
         "version": 1,
+        "app_version": __version__,
+        "release_tag": f"v{__version__}",
         "build_commit": os.environ.get("GITHUB_SHA", "unknown"),
         "platform": "Windows x86_64 portable onedir",
         "offline_manual_workflow": True,
