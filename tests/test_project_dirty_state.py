@@ -116,6 +116,30 @@ def test_save_resets_dirty_baseline(tmp_path, monkeypatch):
     window.close()
 
 
+def test_save_without_json_suffix_tracks_actual_canonical_file(tmp_path, monkeypatch):
+    app = _app()
+    window = MainWindow()
+    window.project.settings.fps = 60
+    window.refresh()
+    requested = tmp_path / "saved-project"
+    actual = tmp_path / "saved-project.json"
+
+    monkeypatch.setattr(
+        "full_album_maker.project_dirty.QFileDialog.getSaveFileName",
+        lambda *args, **kwargs: (str(requested), "Full Album Project (*.json)"),
+    )
+
+    assert window.save_project_file() is True
+    app.processEvents()
+
+    assert actual.exists()
+    assert not requested.exists()
+    assert Path(window._current_project_path) == actual
+    assert actual.name in window.windowTitle()
+    assert str(actual) in window.log.toPlainText()
+    window.close()
+
+
 def test_close_cancel_keeps_dirty_window_open(monkeypatch):
     app = _app()
     window = MainWindow()
