@@ -62,6 +62,13 @@ def _compile(doc: ProjectDocument, tmp_path: Path):
     )
 
 
+def _script_from(compiled) -> Path:
+    option = "-/filter_complex"
+    assert option in compiled.args
+    assert "-filter_complex" not in compiled.args
+    return Path(compiled.args[compiled.args.index(option) + 1])
+
+
 def test_packed_200_song_three_hour_project_resolves_and_externalizes_graph(tmp_path: Path):
     doc = _long_document(mode="packed")
     started = time.perf_counter()
@@ -76,10 +83,7 @@ def test_packed_200_song_three_hour_project_resolves_and_externalizes_graph(tmp_
     assert elapsed < 2.0
 
     compiled = _compile(doc, tmp_path)
-    assert "-filter_complex_script" in compiled.args
-    assert "-filter_complex" not in compiled.args
-    script = Path(compiled.args[compiled.args.index("-filter_complex_script") + 1])
-    graph = script.read_text(encoding="utf-8")
+    graph = _script_from(compiled).read_text(encoding="utf-8")
     assert "concat=n=200:v=0:a=1[album_audio]" in graph
     assert windows_command_line_length(compiled.args) < WINDOWS_COMMAND_SAFE_LIMIT
 
@@ -96,9 +100,7 @@ def test_free_200_song_three_hour_project_resolves_and_uses_bounded_command(tmp_
     assert elapsed < 2.0
 
     compiled = _compile(doc, tmp_path)
-    assert "-filter_complex_script" in compiled.args
-    script = Path(compiled.args[compiled.args.index("-filter_complex_script") + 1])
-    graph = script.read_text(encoding="utf-8")
+    graph = _script_from(compiled).read_text(encoding="utf-8")
     assert "amix=inputs=201:duration=longest" in graph
     assert "anullsrc=r=48000:cl=stereo:d=10800.000000[asilence]" in graph
     assert windows_command_line_length(compiled.args) < WINDOWS_COMMAND_SAFE_LIMIT
@@ -154,8 +156,8 @@ def test_real_ffmpeg_accepts_external_filter_script(tmp_path: Path, monkeypatch)
     )
     doc.validate()
 
-    # Force even this tiny graph through the S12 script path so CI proves the
-    # pinned Windows FFmpeg build supports the exact option used by long albums.
+    # Force even this tiny graph through the S12 file-indirection path so CI
+    # proves the pinned Windows FFmpeg build supports `-/filter_complex`.
     monkeypatch.setattr(s11_graph, "FILTER_GRAPH_SCRIPT_THRESHOLD", 1)
     output = tmp_path / "external-script.mp4"
     compiled = S11FFmpegCompiler(_ffmpeg()).compile_video(
@@ -163,7 +165,7 @@ def test_real_ffmpeg_accepts_external_filter_script(tmp_path: Path, monkeypatch)
         output,
         tmp_path / "work-real",
     )
-    assert "-filter_complex_script" in compiled.args
+    _script_from(compiled)
     subprocess.run(compiled.args, check=True, capture_output=True)
     assert output.exists()
     assert output.stat().st_size > 0
