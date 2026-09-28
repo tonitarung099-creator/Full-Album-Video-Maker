@@ -5,8 +5,8 @@ import tempfile
 
 from .editor_models import ProjectDocument
 from .paths import ffmpeg_path, temp_dir
-from .render_graph import FFmpegV2Compiler
 from .render_service_v2 import FFmpegProcessRunner, RenderErrorV2
+from .s11_render_graph import S11FFmpegCompiler
 
 
 class AccuratePreviewService:
@@ -20,7 +20,12 @@ class AccuratePreviewService:
         target = Path(destination)
         target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="fam_preview_", dir=temp_dir()) as folder:
-            compiled = FFmpegV2Compiler(self.ffmpeg).compile_frame(document.clone(), time_tick, target, folder)
+            compiled = S11FFmpegCompiler(self.ffmpeg).compile_frame(
+                document.clone(),
+                time_tick,
+                target,
+                folder,
+            )
             self.runner.run(compiled.args)
         if not target.exists() or target.stat().st_size == 0:
             raise RenderErrorV2("Preview frame tidak berhasil dibuat.")
