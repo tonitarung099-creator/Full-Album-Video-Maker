@@ -9,6 +9,11 @@ from PIL import Image, ImageStat
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from full_album_maker.custom_template_builder import (
+    build_custom_template_layers,
+    capture_custom_template,
+)
+from full_album_maker.editor_controller import EditorController
 from full_album_maker.editor_models import (
     Layer,
     MediaAsset,
@@ -27,7 +32,11 @@ from full_album_maker.overlay_effects import (
 from full_album_maker.render_graph import FFmpegV2Compiler
 from full_album_maker.s10_workspace import S10EditorWorkspace
 from full_album_maker.spectrum_feature import SPECTRUM_PRESETS
-from full_album_maker.template_system import TEMPLATES, build_template_layers
+from full_album_maker.template_system import (
+    TEMPLATES,
+    apply_template_command,
+    build_template_layers,
+)
 from full_album_maker.template_thumbnail import render_template_thumbnail
 
 
@@ -269,6 +278,45 @@ def test_effect_layer_properties_remain_serializable_and_editable(
     assert clone.opacity != particles.opacity
 
 
+def test_procedural_effect_survives_custom_template_roundtrip(
+    tmp_path: Path,
+):
+    source = _document(tmp_path / "custom-source")
+    controller = EditorController(source)
+    controller.dispatch(
+        apply_template_command(controller.snapshot(), "neon_spectrum")
+    )
+    built = controller.snapshot()
+    template = capture_custom_template(
+        built,
+        "Neon Portable",
+        "Effect procedural tanpa asset eksternal",
+    )
+    effect_specs = [
+        spec
+        for spec in template.layers
+        if spec.get("properties", {}).get("mode") == "effect"
+    ]
+    assert effect_specs
+    assert {
+        spec["properties"]["effect_preset"] for spec in effect_specs
+    } >= {"glow", "particles"}
+    assert all("asset_id" not in spec["properties"] for spec in effect_specs)
+
+    target = _document(tmp_path / "custom-target")
+    rebuilt = build_custom_template_layers(target, template)
+    rebuilt_effects = [
+        layer
+        for layer in rebuilt
+        if layer.properties.get("mode") == "effect"
+    ]
+    assert len(rebuilt_effects) == len(effect_specs)
+    for layer in rebuilt_effects:
+        props = normalize_effect_properties(layer.properties)
+        assert props["seed"] == layer.properties["seed"]
+        assert layer.asset_refs == []
+
+
 def test_s10_workspace_exposes_actual_render_preview_card_without_blocking_tests(
     tmp_path: Path,
 ):
@@ -285,14 +333,20 @@ def test_s10_workspace_exposes_actual_render_preview_card_without_blocking_tests
         first_id = str(workspace.template_combo.currentData() or "")
         assert first_id == "spotify_clean"
         assert workspace.template_preview_title_s10.text() == "Spotify Clean"
-        assert "dinonaktifkan" in workspace.template_preview_status_s10.text().casefold()
+        assert (
+            "dinonaktifkan"
+            in workspace.template_preview_status_s10.text().casefold()
+        )
 
         neon_index = workspace.template_combo.findData("neon_spectrum")
         assert neon_index >= 0
         workspace.template_combo.setCurrentIndex(neon_index)
         app.processEvents()
         assert workspace.template_preview_title_s10.text() == "Neon Spectrum"
-        assert "glow" in workspace.template_preview_description_s10.text().casefold()
+        assert (
+            "glow"
+            in workspace.template_preview_description_s10.text().casefold()
+        )
     finally:
         workspace.close()
         workspace.deleteLater()
