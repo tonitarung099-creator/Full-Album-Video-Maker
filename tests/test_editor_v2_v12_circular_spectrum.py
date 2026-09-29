@@ -157,9 +157,13 @@ def test_circular_polar_work_is_bounded_before_final_scale():
         inner_ratio=0.58,
     )
     assert "showfreqs=s=512x512" in chain
+    assert "colors=white" in chain
+    assert "format=gray" in chain
     assert "atan2(" in chain
     assert "hypot(" in chain
-    assert "geq=" in chain
+    assert "geq=lum=" in chain
+    assert "colorkey=0x000000" in chain
+    assert "colorchannelmixer=rr=" in chain
     assert "scale=1920:1080:force_original_aspect_ratio=decrease" in chain
     assert "pad=1920:1080" in chain
 
@@ -175,9 +179,12 @@ def test_compiler_uses_polar_chain_without_touching_master_audio(tmp_path: Path)
     graph = _filter_graph(compiled)
     assert "asplit=2[aout][specaudio0]" in graph
     assert "[specaudio0]volume=1.350000,showfreqs" in graph
-    assert "geq=r='r(" in graph
+    assert "colors=white,format=gray" in graph
+    assert "geq=lum='if(between(" in graph
     assert "atan2(" in graph
     assert "hypot(" in graph
+    assert "colorkey=0x000000" in graph
+    assert "colorchannelmixer=rr=" in graph
     assert "color=black@0" in graph
     assert "rotate=12.00000000*PI/180" in graph
     assert "[aout]volume" not in graph
