@@ -2,13 +2,14 @@
 
 Aplikasi Windows portable untuk membuat video **full album YouTube** dari banyak file audio dan elemen visual, dengan editor timeline, template, spectrum, render FFmpeg, serta Agen AI Gemini opsional.
 
-> Status: **Stable v1.0.1** setelah milestone S01–S12, Release Candidate Audit, dan maintenance hardening. Build Windows portable diuji dengan regression suite, proyek 200 lagu / 3 jam pada resolver+render graph, real FFmpeg render, dan smoke ZIP hasil ekstrak tanpa Python/FFmpeg global atau API key.
+> Status: **Stable v1.1.0** setelah milestone S01–S12, Release Candidate Audit, maintenance hardening, dan penambahan manajemen cover massal per lagu. Build Windows portable diuji dengan regression suite, proyek 200 lagu / 3 jam pada resolver+render graph, real FFmpeg render, dan smoke ZIP hasil ekstrak tanpa Python/FFmpeg global atau API key.
 
 ## Fitur utama
 
 - Import banyak MP3/WAV/FLAC dan susun playlist.
 - Timeline **Packed** dan **Free Timeline**, termasuk gap/silence dan crossfade eksplisit.
 - Editor layer visual dengan Undo/Redo, Snap, Preview Akurat, dan inspector.
+- Tab **Cover** untuk memasang/menghapus cover ke banyak lagu sekaligus serta pencocokan nama otomatis yang deterministik dan fail-closed bila ambigu.
 - 10 template built-in: Spotify Clean, Cafe Acoustic, Viral Full Album, Vinyl Nostalgia, Neon Spectrum, Romantic Bokeh, Dark Cinematic, Photo Album, Cassette Retro, dan Music Channel Pro.
 - Spectrum/waveform dan overlay procedural seperti bokeh, glow, light leak, grain, VHS noise, vignette, dan particles.
 - Render H.264/H.265 melalui FFmpeg serta YouTube chapters, tracklist, dan timeline sidecar.
@@ -20,12 +21,12 @@ Aplikasi Windows portable untuk membuat video **full album YouTube** dari banyak
 
 ## Portable Windows
 
-Paket stabil bernama `Full-Album-Maker-v1.0.1-Windows-Portable.zip` dan berisi EXE onedir, runtime/DLL PySide6, FFmpeg + ffprobe, fallback Noto Sans, assets, notices, `CAPABILITIES.json`, folder `data`, `temp`, dan `output`.
+Paket stabil bernama `Full-Album-Maker-v1.1.0-Windows-Portable.zip` dan berisi EXE onedir, runtime/DLL PySide6, FFmpeg + ffprobe, fallback Noto Sans, assets, notices, `CAPABILITIES.json`, folder `data`, `temp`, dan `output`.
 
 Setiap GitHub Release juga menyertakan `SHA256SUMS.txt`. Di PowerShell Windows, checksum ZIP dapat diverifikasi dengan:
 
 ```powershell
-Get-FileHash .\Full-Album-Maker-v1.0.1-Windows-Portable.zip -Algorithm SHA256
+Get-FileHash .\Full-Album-Maker-v1.1.0-Windows-Portable.zip -Algorithm SHA256
 ```
 
 Nilai SHA-256 harus sama dengan nilai untuk nama ZIP tersebut di `SHA256SUMS.txt`.
@@ -49,7 +50,7 @@ API key **tidak pernah disimpan di source code atau GitHub**. Pada Windows, key 
 - Circular Spectrum masih ditunda sampai spike teknis packaging/performa/parity/cancel memenuhi gate yang ditentukan.
 - Stress 3 jam di CI menguji model, resolver, render plan/graph, dan keamanan command-line; CI tidak melakukan full encode video selama 3 jam.
 - Detail kemampuan artifact portable tersedia di `CAPABILITIES.json`.
-- Release notes v1.0.1 tersedia di `docs/RELEASE_NOTES_v1.0.1.md`.
+- Release notes v1.1.0 tersedia di `docs/RELEASE_NOTES_v1.1.0.md`.
 
 ## Lisensi
 

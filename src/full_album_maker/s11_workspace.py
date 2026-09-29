@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from .cover_manager import CoverAssignmentService, CoverManagerPanel
 from .editor_models import ProjectDocument, TIMEBASE
 from .editor_session import TimelineScale
 from .free_timeline import SetPlaylistTimingMode, SetSongFreeTiming
@@ -19,7 +20,7 @@ from .timeline_resolver import TimelineResolver
 
 
 class S11EditorWorkspace(S10EditorWorkspace):
-    """S10 workspace plus the opt-in Free Timeline audio controls."""
+    """S10 workspace plus Free Timeline and v1.1 bulk cover controls."""
 
     def __init__(
         self,
@@ -37,6 +38,12 @@ class S11EditorWorkspace(S10EditorWorkspace):
             template_preview_enabled=template_preview_enabled,
         )
         self._install_free_timeline_controls_s11()
+        self.cover_manager_v11 = CoverManagerPanel(self)
+        self.tabs.addTab(self.cover_manager_v11, "Cover")
+        self.cover_manager_v11.assignRequested.connect(self._assign_covers_v11)
+        self.cover_manager_v11.clearRequested.connect(self._clear_covers_v11)
+        self.cover_manager_v11.autoMatchRequested.connect(self._auto_match_covers_v11)
+        self.cover_manager_v11.set_document(self.session.snapshot())
         self.timeline.songSelected.connect(self._select_song_s11)
         self.timeline.songMoveRequested.connect(self._move_song_timeline_s11)
         self.playlist.table.selectionModel().selectionChanged.connect(
@@ -115,11 +122,15 @@ class S11EditorWorkspace(S10EditorWorkspace):
         self._s11_selected_song_id = None
         if hasattr(self, "timeline_mode_combo_s11"):
             self._refresh_free_controls_s11()
+        if hasattr(self, "cover_manager_v11"):
+            self.cover_manager_v11.set_document(self.session.snapshot())
 
     def _after_edit(self) -> None:
         super()._after_edit()
         if hasattr(self, "timeline_mode_combo_s11"):
             self._refresh_free_controls_s11()
+        if hasattr(self, "cover_manager_v11"):
+            self.cover_manager_v11.set_document(self.session.snapshot())
 
     def _playlist_selection_s11(self) -> None:
         if not hasattr(self, "song_label_s11"):
@@ -276,3 +287,55 @@ class S11EditorWorkspace(S10EditorWorkspace):
                 "Pindah lagu ditolak; atur Crossfade bila ingin overlap: " + str(exc)
             )
             self._refresh_free_controls_s11()
+
+    def _assign_covers_v11(self, song_ids, asset_id: str) -> None:
+        try:
+            commands = CoverAssignmentService.bulk_commands(
+                self.session.snapshot(), list(song_ids), asset_id
+            )
+            if not commands:
+                self._set_status("Cover terpilih sudah terpasang pada semua lagu yang dipilih.")
+                return
+            self.session.controller.dispatch(commands)
+            count = len(commands)
+            self._after_edit()
+            self._set_status(
+                f"Cover dipasang ke {count} lagu sebagai satu transaksi Undo."
+            )
+        except Exception as exc:
+            self._set_status(f"Pasang cover massal gagal: {exc}")
+
+    def _clear_covers_v11(self, song_ids) -> None:
+        try:
+            commands = CoverAssignmentService.bulk_commands(
+                self.session.snapshot(), list(song_ids), None
+            )
+            if not commands:
+                self._set_status("Lagu terpilih sudah tidak memiliki cover khusus.")
+                return
+            self.session.controller.dispatch(commands)
+            count = len(commands)
+            self._after_edit()
+            self._set_status(
+                f"Cover khusus dihapus dari {count} lagu sebagai satu transaksi Undo."
+            )
+        except Exception as exc:
+            self._set_status(f"Hapus cover massal gagal: {exc}")
+
+    def _auto_match_covers_v11(self, only_empty: bool) -> None:
+        try:
+            commands, report = CoverAssignmentService.auto_match_commands(
+                self.session.snapshot(), only_empty=bool(only_empty)
+            )
+            if commands:
+                self.session.controller.dispatch(commands)
+                self._after_edit()
+            self._set_status(
+                "Cocokkan cover selesai: "
+                f"{len(commands)} dipasang, "
+                f"{len(report.unmatched_song_ids)} tidak cocok, "
+                f"{len(report.ambiguous_song_ids)} ambigu, "
+                f"{len(report.skipped_existing_song_ids)} cover lama dipertahankan."
+            )
+        except Exception as exc:
+            self._set_status(f"Cocokkan cover gagal: {exc}")
