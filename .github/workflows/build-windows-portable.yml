@@ -41,12 +41,17 @@ jobs:
       - name: Download pinned FFmpeg and portable font assets
         shell: pwsh
         run: |
-          # BtbN release 397659030 / asset 592976307, observed 2026-09-27.
-          # The upstream convenience URL contains "latest", therefore the digest
-          # below is the authority: a changed upstream asset fails the build.
-          $ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip"
-          $ffmpegSha256 = "b745ed683204c8e154d627bf75f2e530b7b2eec51d14fabdc8771912423ba67e"
-          Invoke-WebRequest -Uri $ffmpegUrl -OutFile ffmpeg.zip
+          # BtbN release 398275969 / asset 595476894, observed 2026-09-29.
+          # Pin by release-asset API ID, not the mutable /download/latest/ alias.
+          $ffmpegAssetId = "595476894"
+          $ffmpegUrl = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/assets/$ffmpegAssetId"
+          $ffmpegSha256 = "e6db684f1527f4c2280b017c7af19ebd359424eee8b35974bc35b4d7ee110989"
+          $headers = @{
+            Accept = "application/octet-stream"
+            "User-Agent" = "Full-Album-Maker-Build"
+            "X-GitHub-Api-Version" = "2022-11-28"
+          }
+          Invoke-WebRequest -Uri $ffmpegUrl -Headers $headers -OutFile ffmpeg.zip
           $actual = (Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $ffmpegSha256) {
             throw "Digest FFmpeg berubah. Expected $ffmpegSha256, got $actual. Update pin secara eksplisit."
