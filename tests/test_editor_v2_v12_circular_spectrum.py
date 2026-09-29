@@ -189,12 +189,12 @@ def test_property_inspector_shows_inner_radius_only_for_circular():
     track_id = ProjectDocument.new_empty("Inspector").tracks[0].track_id
     circular = make_spectrum_layer(track_id, 0, preset_id="circular_neon")
     inspector.set_layer(circular)
-    assert inspector.spectrum_inner_ratio.isVisible()
+    assert not inspector.spectrum_inner_ratio.isHidden()
     assert inspector.spectrum_inner_ratio.value() == pytest.approx(0.58)
 
     bars = make_spectrum_layer(track_id, 1, preset_id="minimal_bars")
     inspector.set_layer(bars)
-    assert not inspector.spectrum_inner_ratio.isVisible()
+    assert inspector.spectrum_inner_ratio.isHidden()
 
 
 def test_real_ffmpeg_circular_render_and_accurate_preview_parity(tmp_path: Path):
