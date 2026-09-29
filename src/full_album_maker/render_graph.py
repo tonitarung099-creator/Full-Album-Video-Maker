@@ -7,6 +7,7 @@ import re
 from typing import Iterable
 
 from .album_visuals import format_duration_tick, normalize_visual_properties
+from .circular_spectrum import circular_spectrum_filter
 from .editor_models import Layer, ProjectDocument, TIMEBASE
 from .overlay_effects import effect_source_filter, normalize_effect_properties
 from .render_plan import RenderPlan, compile_render_plan
@@ -137,7 +138,8 @@ class FFmpegV2Compiler:
     """Compiler shared by final render and accurate preview.
 
     S10 extends the same proven S06 compiler with bounded procedural overlay
-    effects. Preview Akurat and final render therefore keep one composition path.
+    effects. v1.2 adds Circular Spectrum inside this same compiler, so Preview
+    Akurat and final render still use one composition path.
     """
 
     def __init__(self, ffmpeg: str) -> None:
@@ -810,12 +812,29 @@ class FFmpegV2Compiler:
                 ascale = _ffmpeg_scale(props["amplitude_scale"])
                 audio_label = spectrum_audio_labels[layer.layer_id]
                 source_label = f"spec{local_stage}"
-                if style in {"bars", "spectrum_line"}:
+                if style == "circular_spectrum":
+                    fscale = _ffmpeg_scale(props["frequency_scale"])
+                    try:
+                        visual_chain = circular_spectrum_filter(
+                            width=width,
+                            height=height,
+                            color=color,
+                            frequency_scale=fscale,
+                            amplitude_scale=ascale,
+                            inner_ratio=props["inner_ratio"],
+                        )
+                    except ValueError as exc:
+                        raise RenderCompileError(str(exc)) from exc
+                elif style in {"bars", "spectrum_line"}:
                     mode = "bar" if style == "bars" else "line"
                     fscale = _ffmpeg_scale(props["frequency_scale"])
                     visualizer = (
                         f"showfreqs=s={width}x{height}:mode={mode}:"
                         f"fscale={fscale}:ascale={ascale}:colors={color}"
+                    )
+                    visual_chain = (
+                        f"{visualizer},format=rgba,"
+                        "colorkey=0x000000:0.08:0.0"
                     )
                 else:
                     split = (
@@ -827,12 +846,16 @@ class FFmpegV2Compiler:
                         f"showwaves=s={width}x{height}:mode=line:scale={ascale}:"
                         f"colors={color}{split}"
                     )
+                    visual_chain = (
+                        f"{visualizer},format=rgba,"
+                        "colorkey=0x000000:0.08:0.0"
+                    )
                 mirror = ",vflip" if props["mirror"] else ""
                 rotate = _rotation_chain(layer)
                 alpha = max(0.0, min(1.0, float(layer.opacity)))
                 filters.append(
-                    f"[{audio_label}]volume={gain:.6f},{visualizer},format=rgba,"
-                    f"colorkey=0x000000:0.08:0.0,colorchannelmixer=aa={alpha:.6f}"
+                    f"[{audio_label}]volume={gain:.6f},{visual_chain},"
+                    f"colorchannelmixer=aa={alpha:.6f}"
                     f"{mirror}{rotate}[{source_label}]"
                 )
                 filters.append(

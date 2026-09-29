@@ -16,20 +16,31 @@ class SpectrumCapability:
     supports_amplitude_scale: bool
     supports_split_channels: bool = False
     supports_smoothing: bool = False
+    supports_inner_ratio: bool = False
 
 
 SPECTRUM_CAPABILITIES: dict[str, SpectrumCapability] = {
     "bars": SpectrumCapability(
-        "bars", "Bars", "showfreqs", True, True, False, False
+        "bars", "Bars", "showfreqs", True, True, False, False, False
     ),
     "spectrum_line": SpectrumCapability(
-        "spectrum_line", "Spectrum Line", "showfreqs", True, True, False, False
+        "spectrum_line", "Spectrum Line", "showfreqs", True, True, False, False, False
     ),
     "waveform": SpectrumCapability(
-        "waveform", "Waveform", "showwaves", False, True, False, False
+        "waveform", "Waveform", "showwaves", False, True, False, False, False
     ),
     "stereo_waveform": SpectrumCapability(
-        "stereo_waveform", "Stereo Waveform", "showwaves", False, True, True, False
+        "stereo_waveform", "Stereo Waveform", "showwaves", False, True, True, False, False
+    ),
+    "circular_spectrum": SpectrumCapability(
+        "circular_spectrum",
+        "Circular Spectrum",
+        "showfreqs+geq",
+        True,
+        True,
+        False,
+        False,
+        True,
     ),
 }
 
@@ -80,6 +91,16 @@ SPECTRUM_PRESETS: dict[str, dict[str, Any]] = {
         "amplitude_scale": "linear",
         "mirror": True,
     },
+    "circular_neon": {
+        "label": "Circular Neon",
+        "style": "circular_spectrum",
+        "color": "#4de8ff",
+        "gain": 1.35,
+        "frequency_scale": "log",
+        "amplitude_scale": "sqrt",
+        "mirror": False,
+        "inner_ratio": 0.58,
+    },
 }
 
 
@@ -121,6 +142,16 @@ def normalize_spectrum_properties(properties: dict[str, Any] | None) -> dict[str
     if amplitude_scale not in {"linear", "sqrt", "cbrt", "log"}:
         raise ValueError("amplitude_scale spectrum tidak didukung.")
 
+    try:
+        inner_ratio = float(source.get("inner_ratio", 0.58))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Radius dalam Circular Spectrum tidak valid.") from exc
+    if capability.supports_inner_ratio:
+        if not 0.15 <= inner_ratio <= 0.85:
+            raise ValueError("Radius dalam Circular Spectrum harus 0.15..0.85.")
+    else:
+        inner_ratio = 0.58
+
     mirror = bool(source.get("mirror", False))
     return {
         "style": style,
@@ -129,6 +160,7 @@ def normalize_spectrum_properties(properties: dict[str, Any] | None) -> dict[str
         "frequency_scale": frequency_scale,
         "amplitude_scale": amplitude_scale,
         "mirror": mirror,
+        "inner_ratio": inner_ratio,
         "preset": str(source.get("preset", "") or ""),
     }
 
@@ -145,13 +177,18 @@ def apply_spectrum_preset(properties: dict[str, Any] | None, preset_id: str) -> 
 
 def make_spectrum_layer(track_id: str, order: int, *, preset_id: str = "neon_bars") -> Layer:
     properties = apply_spectrum_preset({}, preset_id)
+    circular = properties["style"] == "circular_spectrum"
     return Layer(
         track_id=track_id,
         type="spectrum",
-        name="Spectrum",
+        name="Circular Spectrum" if circular else "Spectrum",
         order=order,
         time_binding=TimeBinding(kind="album"),
-        transform=Transform(x=0.08, y=0.72, width=0.84, height=0.20),
+        transform=(
+            Transform(x=0.34, y=0.22, width=0.32, height=0.56)
+            if circular
+            else Transform(x=0.08, y=0.72, width=0.84, height=0.20)
+        ),
         properties=properties,
         origin="manual",
     )

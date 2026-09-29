@@ -92,12 +92,25 @@ def _filters(compiled) -> str:
     return args[args.index("-filter_complex") + 1]
 
 
-def test_registry_exposes_only_proven_s05_styles_and_presets():
-    assert tuple(SPECTRUM_CAPABILITIES) == ("bars", "spectrum_line", "waveform", "stereo_waveform")
-    assert "circular_spectrum" not in SPECTRUM_CAPABILITIES
-    assert {"minimal_bars", "neon_bars", "bass_bars", "thin_line", "mirror"} <= set(SPECTRUM_PRESETS)
+def test_registry_exposes_proven_spectrum_styles_and_presets():
+    assert tuple(SPECTRUM_CAPABILITIES) == (
+        "bars",
+        "spectrum_line",
+        "waveform",
+        "stereo_waveform",
+        "circular_spectrum",
+    )
+    assert SPECTRUM_CAPABILITIES["circular_spectrum"].supports_inner_ratio is True
+    assert {
+        "minimal_bars",
+        "neon_bars",
+        "bass_bars",
+        "thin_line",
+        "mirror",
+        "circular_neon",
+    } <= set(SPECTRUM_PRESETS)
     with pytest.raises(ValueError, match="belum didukung"):
-        normalize_spectrum_properties({"style": "circular_spectrum"})
+        normalize_spectrum_properties({"style": "future_3d_spectrum"})
 
 
 def test_spectrum_preset_normalizes_and_keeps_visual_gain_only():
@@ -198,7 +211,7 @@ def test_background_s05_motion_and_freeze_are_compiled(tmp_path: Path):
 def test_invalid_spectrum_style_fails_closed_before_render(tmp_path: Path):
     doc = _doc(tmp_path, style="bars")
     spectrum = next(layer for layer in doc.layers if layer.type == "spectrum")
-    spectrum.properties["style"] = "circular_spectrum"
+    spectrum.properties["style"] = "future_3d_spectrum"
     with pytest.raises(RenderCompileError, match="belum didukung"):
         FFmpegV2Compiler(shutil.which("ffmpeg") or "ffmpeg").compile_video(
             doc, tmp_path / "x.mp4", tmp_path / "work"
