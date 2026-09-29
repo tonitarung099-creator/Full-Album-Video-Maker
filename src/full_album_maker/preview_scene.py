@@ -311,13 +311,37 @@ class PreviewCanvas(QWidget):
             try:
                 props = normalize_spectrum_properties(layer.properties)
             except Exception:
-                props = {"style": "bars", "color": "#4de8ff", "mirror": False}
+                props = {"style": "bars", "color": "#4de8ff", "mirror": False, "inner_ratio": 0.58}
             color = QColor(str(props.get("color", "#4de8ff")))
             color.setAlphaF(max(0.0, min(1.0, float(layer.opacity))))
             painter.setPen(QPen(color, 2))
             style = str(props.get("style", "bars"))
             phase = (self._playhead_tick / 240000.0) * 2.7
-            if style in {"bars", "spectrum_line"}:
+            if style == "circular_spectrum":
+                size = min(rect.width(), rect.height())
+                center = rect.center()
+                outer_radius = size * 0.48
+                inner_radius = outer_radius * float(props.get("inner_ratio", 0.58))
+                band = max(1.0, outer_radius - inner_radius)
+                count = 72
+                for i in range(count):
+                    ratio = i / count
+                    angle = ratio * math.tau - math.pi / 2
+                    envelope = 0.08 + 0.88 * abs(
+                        math.sin(phase + i * 0.37)
+                        * math.cos(i * 0.13 + phase * 0.45)
+                    )
+                    end_radius = inner_radius + band * envelope
+                    start = QPointF(
+                        center.x() + math.cos(angle) * inner_radius,
+                        center.y() + math.sin(angle) * inner_radius,
+                    )
+                    end = QPointF(
+                        center.x() + math.cos(angle) * end_radius,
+                        center.y() + math.sin(angle) * end_radius,
+                    )
+                    painter.drawLine(start, end)
+            elif style in {"bars", "spectrum_line"}:
                 count = 32
                 points: list[QPointF] = []
                 for i in range(count):
