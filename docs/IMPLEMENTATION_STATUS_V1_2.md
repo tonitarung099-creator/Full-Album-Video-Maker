@@ -1,6 +1,6 @@
 # Implementasi v1.2.0 — Circular Spectrum
 
-Status branch: kandidat release `sol/v1.2.0-circular-spectrum`.
+Status branch: **PR gate hijau, siap squash-merge exact head**.
 
 ## Implementasi
 
@@ -11,7 +11,26 @@ Status branch: kandidat release `sol/v1.2.0-circular-spectrum`.
 - `preview_scene.py`: proxy radial ringan untuk interaksi editor.
 - regression: registry/preset, bounded polar cost, compiler graph, inspector visibility, real FFmpeg render, transparent center, Preview Akurat parity, cancel safety.
 - release identity: v1.2.0 + README, capability report, acceptance, dan release notes.
+- schema project tetap v2; project v1.1.0 tidak memerlukan migrasi.
 
-## Gate
+## Gate final PR #36
 
-Branch belum boleh merge sebelum workflow Windows exact head lulus seluruh pytest, real FFmpeg, PyInstaller onedir, versioned ZIP + SHA256SUMS, isolated portable smoke, dan upload artifact. GitHub Release hanya boleh dibuat oleh push `main` yang lulus gate yang sama.
+Exact head sebelum dokumentasi gate: `75ec3abfa97a66f5f100469eeb2936d16d4de0d0`.
+Workflow **Build Windows Portable #184**, run `36527034174`, selesai `success`:
+
+- **303 passed, 0 failed** dalam `65.43s`;
+- pinned FFmpeg/ffprobe Windows sukses;
+- real Circular Spectrum + Preview Akurat parity sukses;
+- PyInstaller Windows onedir sukses;
+- capability bundle sukses;
+- versioned ZIP + `SHA256SUMS.txt` sukses;
+- isolated portable smoke sukses tanpa Python/FFmpeg global dan tanpa Gemini/Google API key;
+- smoke menghasilkan stream `audio` + `video`, GUI title `Full Album Maker v1.2.0 • Editor V2`;
+- upload artifact sukses: artifact ID `11014967212`, wrapper size `183879881` bytes, wrapper SHA-256 `1320b5b99ad18aad3b0584135ea88504e3e72bf4112e0d60c40a2205d8b654ee`;
+- step Publish stable GitHub Release **skipped**, sesuai kontrak PR.
+
+## Riwayat spike
+
+Run awal #179–#181 menemukan incompatibility/regression pada pendekatan alpha/warm-up awal. Perubahan tersebut tidak pernah dirilis. Implementasi final menjaga semantics preview lama dan memakai grayscale polar chain yang portable pada pinned Windows FFmpeg.
+
+Baseline: v1.1.0 / `81437e24edfbc77ba0b7308490a877fe5644754b`.
