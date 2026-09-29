@@ -54,7 +54,21 @@ EDITOR_V2_ACTIONS = {
     "render_project",
 }
 
-ALLOWED_ACTIONS = LEGACY_ACTIONS | EDITOR_V2_ACTIONS
+EDITOR_V14_ACTIONS = {
+    "add_circular_spectrum",
+    "set_circular_spectrum",
+    "set_song_cover",
+    "clear_song_cover",
+    "auto_match_covers",
+    "set_song_visual",
+    "clear_song_visual",
+    "auto_match_song_visuals",
+    "set_song_visual_style",
+    "set_timeline_mode",
+    "set_song_timing",
+}
+
+ALLOWED_ACTIONS = LEGACY_ACTIONS | EDITOR_V2_ACTIONS | EDITOR_V14_ACTIONS
 
 
 @dataclass(frozen=True)
@@ -161,8 +175,7 @@ class AppIntentExecutor:
                 )
             elif name == "move_video":
                 result.messages.append(
-                    f"✓ Video posisi {args['from_position']} dipindah ke {args['to_position']}."
-                )
+                    f"✓ Video posisi {args['from_position']} dipindah ke {args['to_position']}.")
             elif name == "remove_audio":
                 result.messages.append(f"✓ Lagu posisi {args['position']} dihapus.")
             elif name == "remove_video":
@@ -179,13 +192,4 @@ class AppIntentExecutor:
                 f"{len(plan.audio_clips)} clip audio, "
                 f"speed {plan.planned_speed:.3f}x."
             )
-            if plan.auto_cut_seconds > 0:
-                result.messages.append(
-                    f"✓ Auto Cut: {plan.auto_cut_seconds:.3f} detik."
-                )
-            if plan.loop_fill_seconds > 0:
-                result.messages.append(
-                    f"✓ Tambahan {plan.loop_mode}: {plan.loop_fill_seconds:.3f} detik."
-                )
-
         return result
