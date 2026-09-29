@@ -72,8 +72,11 @@ def main() -> int:
             "free_timeline_gap_silence": "supported",
             "free_timeline_explicit_crossfade": "supported",
             "spectrum_mixed_audio_parity": "supported",
+            "circular_spectrum": "supported; showfreqs + bounded polar geq remap",
+            "circular_spectrum_internal_side_max": 512,
             "ten_builtin_templates": "supported",
             "custom_templates": "supported",
+            "bulk_song_cover_manager": "supported",
             "ai_editor": "optional; requires configured provider key only for AI actions",
         },
         "s12_validation": {
@@ -96,6 +99,7 @@ def main() -> int:
         },
         "limitations": [
             "CI does not fully encode a three-hour album; it compile-stresses the 200-song/3-hour project and separately performs short real FFmpeg renders.",
+            "Circular Spectrum bounds the expensive polar remap to at most 512x512 pixels before scaling to the requested layer box.",
             "User-selected custom font_path assets remain the user's responsibility; the portable build bundles Noto Sans as its deterministic fallback font asset.",
             "AI actions are unavailable without an API key, while manual editing/template/preview/render remain available offline.",
         ],
