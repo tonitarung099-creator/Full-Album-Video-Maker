@@ -13,7 +13,7 @@ from .editor_models import ProjectDocument
 from .paths import ffmpeg_path, output_dir
 from .render_graph import RenderCompileError
 from .render_plan import RenderPlan
-from .s11_render_graph import S11FFmpegCompiler
+from .v13_render_graph import V13FFmpegCompiler
 
 
 class RenderErrorV2(RuntimeError):
@@ -102,15 +102,6 @@ def _write_chapters(path: Path, document: ProjectDocument, plan: RenderPlan) -> 
 
 
 def _normalized_mp4_destination(destination: str | Path) -> Path:
-    """Return the canonical MP4 output path used by the v2 renderer.
-
-    Native save dialogs do not consistently append the selected filter suffix on
-    every Windows configuration. The renderer only publishes MP4, so a missing
-    extension is normalized here instead of relying on UI behavior. An explicit
-    non-MP4 suffix is rejected to avoid silently writing MP4 bytes under a
-    misleading file name.
-    """
-
     path = Path(destination)
     if not path.suffix:
         path = path.with_suffix(".mp4")
@@ -149,6 +140,13 @@ class EditorRenderService:
         active_asset_ids = {
             song.asset_id for song in snapshot.playlist.entries if song.enabled
         }
+        for song in snapshot.playlist.entries:
+            if not song.enabled:
+                continue
+            if song.cover_asset_id:
+                active_asset_ids.add(song.cover_asset_id)
+            if song.visual_asset_id:
+                active_asset_ids.add(song.visual_asset_id)
         active_asset_ids.update(
             ref
             for layer in snapshot.layers
@@ -185,7 +183,7 @@ class EditorRenderService:
                 dir=dest.parent,
             ) as folder:
                 work = Path(folder)
-                compiled = S11FFmpegCompiler(self.ffmpeg).compile_video(
+                compiled = V13FFmpegCompiler(self.ffmpeg).compile_video(
                     snapshot,
                     staged,
                     work,
@@ -226,7 +224,7 @@ class EditorRenderService:
                 publish_bundle_transactional(
                     zip(stages, [dest, chapter, tracklist, timeline])
                 )
-        except (RenderCompileError, OSError, subprocess.SubprocessError) as exc:
+        except (RenderCompileError, OSError, subprocess.SubprocessError, ValueError) as exc:
             raise RenderErrorV2(str(exc)) from exc
         finally:
             for path in stages:

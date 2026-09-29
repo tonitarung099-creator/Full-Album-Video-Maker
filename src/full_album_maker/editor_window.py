@@ -19,14 +19,14 @@ from .editor_controller import RevisionConflict
 from .editor_models import ProjectDocument
 from .gemini_agent import GeminiAgent
 from .legacy_sync_v2 import sync_legacy_media
-from .s11_workspace import S11EditorWorkspace
 from .style import APP_STYLE
 from .template_system import template_choices
 from .ui import MainWindow as LegacyMainWindow
+from .v13_workspace import V13EditorWorkspace
 
 
 class EditorMainWindow(LegacyMainWindow):
-    """Main application shell with editor-v2, AI intents, and S11 free timeline."""
+    """Main application shell with Editor V2, AI intents, Free Timeline and Song Visuals."""
 
     def __init__(self) -> None:
         self._editor_workspace_ready = False
@@ -40,7 +40,7 @@ class EditorMainWindow(LegacyMainWindow):
 
         seed = ProjectDocument.new_empty("Editor Full Album")
         seed, _ = sync_legacy_media(seed, self.project)
-        self.editor_workspace = S11EditorWorkspace(seed, self.splitter)
+        self.editor_workspace = V13EditorWorkspace(seed, self.splitter)
         self.editor_workspace.statusMessage.connect(self._on_editor_status)
         self.editor_workspace.dirtyChanged.connect(
             lambda _: self._update_editor_title()
@@ -60,8 +60,9 @@ class EditorMainWindow(LegacyMainWindow):
         self._update_editor_title()
         self.chat.appendPlainText(
             "\n[EDITOR V2]\nGemini dapat mengedit layer, playlist, spectrum, cover, progress, dan template. "
-            "S11 menambahkan Free Timeline audio terpisah: gap menjadi silence dan overlap wajib crossfade eksplisit. "
-            "Gemini belum diberi aksi timing-free otomatis; kontrol S11 tetap lokal, tervalidasi, dan Undo/Redo.\n"
+            "Free Timeline menjaga gap/silence dan crossfade eksplisit. "
+            "v1.3 menambahkan Visual Lagu per-song: foto/video, motion foto, serta transisi cut/fade/slide. "
+            "Assignment Visual Lagu tetap lokal, berbasis song_id, tervalidasi, dan Undo/Redo.\n"
         )
 
     def _ensure_ai_executor(self) -> AIEditorExecutor:
