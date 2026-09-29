@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from .editor_models import Layer, ProjectDocument
-from .render_graph import CompiledFFmpeg, FFmpegV2Compiler, ticks_to_seconds
+from .render_graph import CompiledFFmpeg, FFmpegV2Compiler, RenderCompileError, ticks_to_seconds
 
 
 _AUDIO_SEGMENT = re.compile(r"^\[(\d+):a\].*\[aseg(\d+)\]$")
@@ -58,6 +58,68 @@ def _externalize_large_filter_graph(
         tuple(args),
         compiled.render_plan,
         compiled.text_files + (script,),
+    )
+
+
+def _append_frame_trim(
+    compiled: CompiledFFmpeg,
+    *,
+    time_tick: int,
+    frame_duration: float,
+    work_dir: str | Path,
+) -> CompiledFFmpeg:
+    """Trim one preview frame *after* the full composition graph has run.
+
+    Output-side `-ss` can let newer FFmpeg builds seek video directly to the
+    requested frame while an audio-driven visualizer such as showfreqs has not
+    consumed enough audio to establish its state. By trimming `[vout]` inside the
+    graph, every upstream filter keeps the original timeline and audio warm-up,
+    then only the requested frame interval is exposed as `[frameout]`.
+    """
+
+    args = list(compiled.args)
+    start = ticks_to_seconds(time_tick)
+    end = start + max(0.001, float(frame_duration))
+    trim = (
+        f"[vout]trim=start={start:.6f}:end={end:.6f},"
+        "setpts=PTS-STARTPTS[frameout]"
+    )
+    text_files = list(compiled.text_files)
+
+    if "-filter_complex" in args:
+        index = args.index("-filter_complex")
+        if index + 1 >= len(args):
+            raise RenderCompileError("Filter graph Preview Akurat tidak lengkap.")
+        graph = str(args[index + 1]).rstrip(";\n")
+        args[index + 1] = graph + ";" + trim
+    elif "-/filter_complex" in args:
+        index = args.index("-/filter_complex")
+        if index + 1 >= len(args):
+            raise RenderCompileError("Filter script Preview Akurat tidak lengkap.")
+        source = Path(args[index + 1])
+        graph = source.read_text(encoding="utf-8").strip().rstrip(";")
+        work = Path(work_dir)
+        work.mkdir(parents=True, exist_ok=True)
+        frame_script = work / "filter-complex-preview.txt"
+        frame_script.write_text(graph + ";" + trim + "\n", encoding="utf-8")
+        args[index + 1] = str(frame_script)
+        text_files.append(frame_script)
+    else:
+        raise RenderCompileError("Filter graph Preview Akurat tidak ditemukan.")
+
+    replaced = False
+    for index in range(len(args) - 1):
+        if args[index] == "-map" and args[index + 1] == "[vout]":
+            args[index + 1] = "[frameout]"
+            replaced = True
+            break
+    if not replaced:
+        raise RenderCompileError("Output video Preview Akurat tidak ditemukan.")
+
+    return CompiledFFmpeg(
+        tuple(args),
+        compiled.render_plan,
+        tuple(text_files),
     )
 
 
@@ -199,3 +261,54 @@ class S11FFmpegCompiler(FFmpegV2Compiler):
             compiled.text_files,
         )
         return _externalize_large_filter_graph(result, work_dir)
+
+    def compile_frame(
+        self,
+        document: ProjectDocument,
+        time_tick: int,
+        destination: str | Path,
+        work_dir: str | Path,
+    ) -> CompiledFFmpeg:
+        if time_tick < 0:
+            raise RenderCompileError("Waktu preview tidak boleh negatif.")
+
+        compiled = self.compile_video(
+            document,
+            destination,
+            work_dir,
+            include_audio=False,
+        )
+        fps = document.canvas.fps_num / document.canvas.fps_den
+        compiled = _append_frame_trim(
+            compiled,
+            time_tick=time_tick,
+            frame_duration=1.0 / max(1.0, fps),
+            work_dir=work_dir,
+        )
+
+        args = list(compiled.args)
+        output = args.pop()
+        if "-c:v" in args:
+            index = args.index("-c:v")
+            args[index + 1] = "png"
+        for option in ("-movflags", "-t", "-r"):
+            while option in args:
+                index = args.index(option)
+                del args[index : index + 2]
+        if "-pix_fmt" in args:
+            index = args.index("-pix_fmt")
+            args[index + 1] = "rgb24"
+        args += [
+            "-frames:v",
+            "1",
+            "-update",
+            "1",
+            "-f",
+            "image2",
+            output,
+        ]
+        return CompiledFFmpeg(
+            tuple(args),
+            compiled.render_plan,
+            compiled.text_files,
+        )
