@@ -13,11 +13,14 @@ from full_album_maker.project_dirty import _update_window_title
 ROOT = Path(__file__).resolve().parents[1]
 FFMPEG_ASSET_ID = "595476894"
 FFMPEG_SHA256 = "e6db684f1527f4c2280b017c7af19ebd359424eee8b35974bc35b4d7ee110989"
+CHECKOUT_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1"
+SETUP_PYTHON_SHA = "5fda3b95a4ea91299a34e894583c3862153e4b97"
+UPLOAD_ARTIFACT_SHA = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 
 
 def test_stable_version_is_consistent_across_package_metadata():
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert __version__ == "1.0.1"
+    assert __version__ == "1.0.2"
     assert pyproject["project"]["version"] == __version__
     assert (ROOT / f"docs/RELEASE_NOTES_v{__version__}.md").exists()
 
@@ -71,6 +74,13 @@ def test_release_workflow_is_gated_versioned_checksummed_and_immutable():
     assert "gui_title -notlike \"*v$env:APP_VERSION*\"" in workflow
     assert 'Set-Content -Path "SHA256SUMS.txt" -Encoding ascii' in workflow
     assert "SHA256SUMS.txt tidak cocok" in workflow
+
+    assert f"actions/checkout@{CHECKOUT_SHA}" in workflow
+    assert f"actions/setup-python@{SETUP_PYTHON_SHA}" in workflow
+    assert f"actions/upload-artifact@{UPLOAD_ARTIFACT_SHA}" in workflow
+    assert "actions/checkout@11d5960a326750d5838078e36cf38b85af677262" not in workflow
+    assert "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065" not in workflow
+    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" not in workflow
 
     asset_api_base = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/assets/"
     assert asset_api_base in workflow
