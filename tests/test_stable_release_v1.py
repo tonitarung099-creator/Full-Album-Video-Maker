@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_stable_version_is_consistent_across_package_metadata():
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert __version__ == "1.0.0"
+    assert __version__ == "1.0.1"
     assert pyproject["project"]["version"] == __version__
     assert (ROOT / f"docs/RELEASE_NOTES_v{__version__}.md").exists()
 
@@ -51,7 +51,7 @@ def test_capability_report_records_release_identity(tmp_path: Path):
     assert payload["release_tag"] == f"v{__version__}"
 
 
-def test_release_workflow_is_gated_and_versioned():
+def test_release_workflow_is_gated_versioned_and_checksummed():
     workflow = (ROOT / ".github" / "workflows" / "build-windows-portable.yml").read_text(
         encoding="utf-8"
     )
@@ -60,9 +60,13 @@ def test_release_workflow_is_gated_and_versioned():
     assert "contents: write" in workflow
     assert "Full-Album-Maker-v$version-Windows-Portable.zip" in workflow
     assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow
-    assert "gh release create $tag $env:RELEASE_ZIP" in workflow
+    assert "gh release create $tag $env:RELEASE_ZIP SHA256SUMS.txt" in workflow
     assert "docs/RELEASE_NOTES_$tag.md" in workflow
     assert "gui_title -notlike \"*v$env:APP_VERSION*\"" in workflow
+    assert 'Set-Content -Path "SHA256SUMS.txt" -Encoding ascii' in workflow
+    assert "SHA256SUMS.txt tidak cocok" in workflow
 
     assert "Full-Album-Maker-v$Version-Windows-Portable.zip" in local_build
     assert "gui_title -notlike \"*v$Version*\"" in local_build
+    assert '$ChecksumFile = "$Root\\SHA256SUMS.txt"' in local_build
+    assert "SHA256SUMS.txt tidak cocok" in local_build
