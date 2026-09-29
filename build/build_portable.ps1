@@ -19,7 +19,7 @@ $ReleaseZipName = "Full-Album-Maker-v$Version-Windows-Portable.zip"
 
 # Keep the local release path aligned with CI. A developer running this script
 # should get the same dependency family, FFmpeg digest, font fallback, capability
-# report, and extracted-ZIP smoke contract as the GitHub Actions artifact.
+# report, checksum, and extracted-ZIP smoke contract as the GitHub Actions artifact.
 python -m pip install pip==26.2.1
 Assert-NativeSuccess "Pin pip"
 python -m pip install -r build/requirements-windows.lock
@@ -101,6 +101,14 @@ if (Test-Path $Zip) { Remove-Item $Zip -Force }
 Compress-Archive -Path "$App" -DestinationPath $Zip
 if (-not (Test-Path $Zip)) { throw "Portable ZIP tidak berhasil dibuat." }
 
+$ZipSha256 = (Get-FileHash $Zip -Algorithm SHA256).Hash.ToLowerInvariant()
+$ChecksumFile = "$Root\SHA256SUMS.txt"
+"$ZipSha256  $ReleaseZipName" | Set-Content -Path $ChecksumFile -Encoding ascii
+$RecordedChecksum = (Get-Content $ChecksumFile -Raw).Trim()
+if ($RecordedChecksum -ne "$ZipSha256  $ReleaseZipName") {
+    throw "SHA256SUMS.txt tidak cocok dengan ZIP portable yang baru dibuat."
+}
+
 $SmokeRoot = Join-Path $Root "portable smoke – O'Brien"
 if (Test-Path $SmokeRoot) { Remove-Item $SmokeRoot -Recurse -Force }
 Expand-Archive $Zip -DestinationPath $SmokeRoot
@@ -153,5 +161,6 @@ if ($Smoke.gui_title -notlike "*v$Version*") {
 
 Write-Host "Full Album Maker v$Version"
 Write-Host "Portable ZIP siap di: $Zip"
-Write-Host "SHA-256: $((Get-FileHash $Zip -Algorithm SHA256).Hash.ToLowerInvariant())"
+Write-Host "SHA256SUMS siap di: $ChecksumFile"
+Write-Host "SHA-256: $ZipSha256"
 Write-Host "Smoke portable: OK ($($Smoke.output_duration_seconds)s; $($Smoke.output_bytes) bytes; $($Smoke.output_streams -join ', '))"
