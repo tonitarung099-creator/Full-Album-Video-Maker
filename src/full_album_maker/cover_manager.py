@@ -24,18 +24,36 @@ from .editor_models import MediaAsset, ProjectDocument
 from .playlist_commands import SetSongCover
 
 
+_MEDIA_EXTENSIONS = {
+    ".aac",
+    ".flac",
+    ".jpeg",
+    ".jpg",
+    ".m4a",
+    ".mp3",
+    ".ogg",
+    ".opus",
+    ".png",
+    ".wav",
+    ".webp",
+}
+
+
 def normalize_cover_key(value: str) -> str:
     """Normalize a title/file name for conservative exact cover matching.
 
     This intentionally does not perform fuzzy matching. A leading track number is
-    removed only when it is followed by a filename-style separator, then unicode,
-    punctuation and whitespace are normalized deterministically.
+    removed only when it is followed by a filename-style separator. Known media
+    extensions are stripped, while dots in real titles such as "Mr. Brightside"
+    remain part of the title before punctuation normalization.
     """
 
     raw = unicodedata.normalize("NFKC", str(value or "")).strip()
     if not raw:
         return ""
-    raw = Path(raw).stem
+    path = Path(raw)
+    if path.suffix.casefold() in _MEDIA_EXTENSIONS:
+        raw = path.stem
     raw = re.sub(r"^\s*\d{1,3}\s*(?:[-_.]+\s*)", "", raw)
     raw = raw.casefold()
     raw = re.sub(r"[_\W]+", " ", raw, flags=re.UNICODE)
@@ -167,14 +185,6 @@ class CoverAssignmentService:
         document: ProjectDocument, *, only_empty: bool = True
     ) -> tuple[list[SetSongCover], CoverAutoMatchReport]:
         report = CoverAssignmentService.auto_match(document, only_empty=only_empty)
-        commands = CoverAssignmentService.bulk_commands(
-            document,
-            list(report.matches),
-            None,
-        )
-        # bulk_commands above is useful for validation but clearing is not what we
-        # want here; build the exact assignments after the validation pass.
-        del commands
         assignments = [
             SetSongCover(song.song_id, report.matches[song.song_id])
             for song in document.playlist.entries
@@ -243,10 +253,10 @@ class CoverManagerPanel(QWidget):
         self._refresh_buttons()
 
     def set_document(self, document: ProjectDocument) -> None:
-        selected = set(self.selected_song_ids())
         self._document = document.clone()
         assets = self._document.asset_map()
 
+        self.table.clearSelection()
         self.table.setRowCount(len(self._document.playlist.entries))
         for row_index, song in enumerate(self._document.playlist.entries):
             number = QTableWidgetItem(str(row_index + 1))
@@ -261,8 +271,6 @@ class CoverManagerPanel(QWidget):
             for column, value in enumerate((number, title, artist, cover_text)):
                 item = value if isinstance(value, QTableWidgetItem) else QTableWidgetItem(str(value))
                 self.table.setItem(row_index, column, item)
-            if song.song_id in selected:
-                self.table.selectRow(row_index)
 
         current_asset = str(self.cover_combo.currentData() or "")
         self.cover_combo.blockSignals(True)
