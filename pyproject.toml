@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "full-album-video-maker"
-version = "1.0.1"
+version = "1.0.2"
 description = "Portable Windows full-album video maker with FFmpeg and Gemini Agent"
 readme = "README.md"
 requires-python = ">=3.11"
