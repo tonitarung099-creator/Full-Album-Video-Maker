@@ -25,11 +25,19 @@ Assert-NativeSuccess "Pin pip"
 python -m pip install -r build/requirements-windows.lock
 Assert-NativeSuccess "Install dependency Python terkunci"
 
-$FfmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip"
-$FfmpegSha256 = "b745ed683204c8e154d627bf75f2e530b7b2eec51d14fabdc8771912423ba67e"
+# BtbN release 398275969 / asset 595476894, observed 2026-09-29.
+# Pin by release-asset API ID, not the mutable /download/latest/ alias.
+$FfmpegAssetId = "595476894"
+$FfmpegUrl = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/assets/$FfmpegAssetId"
+$FfmpegSha256 = "e6db684f1527f4c2280b017c7af19ebd359424eee8b35974bc35b4d7ee110989"
+$FfmpegHeaders = @{
+    Accept = "application/octet-stream"
+    "User-Agent" = "Full-Album-Maker-Build"
+    "X-GitHub-Api-Version" = "2022-11-28"
+}
 if (Test-Path ffmpeg.zip) { Remove-Item ffmpeg.zip -Force }
 if (Test-Path ffmpeg_unpack) { Remove-Item ffmpeg_unpack -Recurse -Force }
-Invoke-WebRequest -Uri $FfmpegUrl -OutFile ffmpeg.zip
+Invoke-WebRequest -Uri $FfmpegUrl -Headers $FfmpegHeaders -OutFile ffmpeg.zip
 $ActualFfmpegSha = (Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($ActualFfmpegSha -ne $FfmpegSha256) {
     throw "Digest FFmpeg berubah. Expected $FfmpegSha256, got $ActualFfmpegSha. Update pin secara eksplisit."
