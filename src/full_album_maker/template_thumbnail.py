@@ -8,9 +8,9 @@ import tempfile
 from .editor_controller import EditorController
 from .editor_models import ProjectDocument
 from .paths import ffmpeg_path
-from .s11_render_graph import S11FFmpegCompiler
 from .template_system import apply_template_command, template_definition
 from .timeline_resolver import TimelineResolver
+from .v13_render_graph import V13FFmpegCompiler
 
 
 class TemplateThumbnailError(RuntimeError):
@@ -41,7 +41,6 @@ def render_template_thumbnail(
     *,
     ffmpeg: str | None = None,
 ) -> str:
-    """Render a PNG through the same S11 accurate-preview/final compiler."""
     executable = ffmpeg or ffmpeg_path()
     if not executable:
         raise TemplateThumbnailError("FFmpeg tidak ditemukan untuk thumbnail template.")
@@ -63,7 +62,7 @@ def render_template_thumbnail(
             prefix=f".{dest.stem}.template-work-",
             dir=dest.parent,
         ) as work:
-            compiled = S11FFmpegCompiler(executable).compile_frame(
+            compiled = V13FFmpegCompiler(executable).compile_frame(
                 snapshot,
                 tick,
                 stage,
