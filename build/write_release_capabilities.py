@@ -77,7 +77,16 @@ def main() -> int:
             "ten_builtin_templates": "supported",
             "custom_templates": "supported",
             "bulk_song_cover_manager": "supported",
+            "per_song_visual_image_video": "supported; photo motion + video loop/freeze + cut/fade/slide transitions",
             "ai_editor": "optional; requires configured provider key only for AI actions",
+            "ai_editor_v14_parity": [
+                "bulk cover assign/clear/auto-match",
+                "song visual assign/clear/auto-match/style",
+                "circular spectrum add/configure",
+                "packed/free timeline mode",
+                "free song start/crossfade timing",
+            ],
+            "ai_context_media_privacy": "stable IDs + safe basenames only; no locator/path/API key",
         },
         "s12_validation": {
             "long_project_model": "200 songs x 54 seconds = 3 hours",
@@ -94,7 +103,8 @@ def main() -> int:
                 "no Gemini/Google API key",
                 "real bundled-FFmpeg A/V render",
                 "ffprobe audio+video verification",
-                "Qt main-window construction",
+                "Qt v1.4 main-window construction",
+                "v1.4 AI context builder active",
             ],
         },
         "limitations": [
@@ -102,6 +112,7 @@ def main() -> int:
             "Circular Spectrum bounds the expensive polar remap to at most 512x512 pixels before scaling to the requested layer box.",
             "User-selected custom font_path assets remain the user's responsibility; the portable build bundles Noto Sans as its deterministic fallback font asset.",
             "AI actions are unavailable without an API key, while manual editing/template/preview/render remain available offline.",
+            "Gemini may translate user language into supported intents, but local exact-ID/query validation remains authoritative and ambiguous media is never guessed.",
         ],
     }
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

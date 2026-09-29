@@ -35,9 +35,9 @@ def main(argv: list[str] | None = None) -> int:
 
         return run_portable_smoke()
 
-    # Import after installing the legacy compatibility layers so EditorMainWindow
-    # inherits the exact proven media/AI behavior while using the explicit v2 center.
-    from full_album_maker.editor_window import run
+    # Import after installing the legacy compatibility layers so the v1.4 window
+    # inherits the proven Editor V2 shell while extending only Gemini intents/context.
+    from full_album_maker.v14_window import run
 
     return run()
 

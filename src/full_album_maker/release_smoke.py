@@ -42,7 +42,7 @@ def run_portable_smoke() -> int:
 
     This intentionally renders a tiny real A/V output through the same S11/S12
     compiler used by the editor, probes both streams, then constructs the actual
-    Qt main window. It is a release gate, not a substitute for the full test suite.
+    v1.4 Qt main window. It is a release gate, not a substitute for the full suite.
     """
 
     root = app_root().resolve()
@@ -145,16 +145,19 @@ def run_portable_smoke() -> int:
             raise RuntimeError(f"Durasi output smoke tidak wajar: {duration}")
 
         from PySide6.QtWidgets import QApplication
-        from .editor_window import EditorMainWindow
+        from .v14_window import V14EditorMainWindow
 
         app = QApplication.instance() or QApplication([])
-        window = EditorMainWindow()
+        window = V14EditorMainWindow()
         window.show()
         app.processEvents()
         gui_title = window.windowTitle()
+        ai_parity = type(window._ai_context_builder).__name__ == "V14EditorAIContextBuilder"
         window.hide()
         window.deleteLater()
         app.processEvents()
+        if not ai_parity:
+            raise RuntimeError("Smoke portable tidak memakai AI context v1.4.")
 
         report.update(
             {
@@ -166,6 +169,7 @@ def run_portable_smoke() -> int:
                 "output_duration_seconds": duration,
                 "output_streams": stream_types,
                 "gui_title": gui_title,
+                "ai_parity": ai_parity,
             }
         )
         target = _write_report(report)
