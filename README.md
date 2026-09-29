@@ -2,7 +2,7 @@
 
 Aplikasi Windows portable untuk membuat video **full album YouTube** dari banyak file audio dan elemen visual, dengan editor timeline, template, spectrum, render FFmpeg, serta Agen AI Gemini opsional.
 
-> Status: **Stable v1.2.0** setelah milestone S01–S12, Release Candidate Audit, maintenance hardening, Cover Manager v1.1.0, dan pengaktifan Circular Spectrum nyata berbasis FFmpeg. Build Windows portable diuji dengan regression suite, proyek 200 lagu / 3 jam pada resolver+render graph, real FFmpeg render, dan smoke ZIP hasil ekstrak tanpa Python/FFmpeg global atau API key.
+> Status: **Stable v1.3.0 candidate** setelah milestone S01–S12, Release Candidate Audit, Cover Manager, Circular Spectrum, dan penambahan Visual Lagu per-song. Build Windows portable tetap wajib melewati regression suite, real FFmpeg render, dan smoke ZIP hasil ekstrak tanpa Python/FFmpeg global atau API key sebelum release dipublikasikan.
 
 ## Fitur utama
 
@@ -10,6 +10,7 @@ Aplikasi Windows portable untuk membuat video **full album YouTube** dari banyak
 - Timeline **Packed** dan **Free Timeline**, termasuk gap/silence dan crossfade eksplisit.
 - Editor layer visual dengan Undo/Redo, Snap, Preview Akurat, dan inspector.
 - Tab **Cover** untuk memasang/menghapus cover ke banyak lagu sekaligus serta pencocokan nama otomatis yang deterministik dan fail-closed bila ambigu.
+- Tab **Visual Lagu** untuk memasang foto/video per lagu, auto-match nama, motion foto (zoom/pan), playback video loop/freeze, dan transisi cut/fade/slide yang mengikuti pergantian lagu.
 - 10 template built-in: Spotify Clean, Cafe Acoustic, Viral Full Album, Vinyl Nostalgia, Neon Spectrum, Romantic Bokeh, Dark Cinematic, Photo Album, Cassette Retro, dan Music Channel Pro.
 - Spectrum/waveform: Bars, Spectrum Line, Waveform, Stereo Waveform, serta **Circular Spectrum** dengan preset Circular Neon dan radius dalam yang dapat diatur.
 - Circular Spectrum memakai audio visualizer nyata + polar mapping FFmpeg, Preview Akurat/final render satu compiler, dan remap internal dibatasi maksimal 512×512 sebelum di-scale ke box layer agar biaya render tetap bounded.
@@ -23,12 +24,12 @@ Aplikasi Windows portable untuk membuat video **full album YouTube** dari banyak
 
 ## Portable Windows
 
-Paket stabil bernama `Full-Album-Maker-v1.2.0-Windows-Portable.zip` dan berisi EXE onedir, runtime/DLL PySide6, FFmpeg + ffprobe, fallback Noto Sans, assets, notices, `CAPABILITIES.json`, folder `data`, `temp`, dan `output`.
+Paket stabil v1.3.0 bernama `Full-Album-Maker-v1.3.0-Windows-Portable.zip` dan berisi EXE onedir, runtime/DLL PySide6, FFmpeg + ffprobe, fallback Noto Sans, assets, notices, `CAPABILITIES.json`, folder `data`, `temp`, dan `output`.
 
 Setiap GitHub Release juga menyertakan `SHA256SUMS.txt`. Di PowerShell Windows, checksum ZIP dapat diverifikasi dengan:
 
 ```powershell
-Get-FileHash .\Full-Album-Maker-v1.2.0-Windows-Portable.zip -Algorithm SHA256
+Get-FileHash .\Full-Album-Maker-v1.3.0-Windows-Portable.zip -Algorithm SHA256
 ```
 
 Nilai SHA-256 harus sama dengan nilai untuk nama ZIP tersebut di `SHA256SUMS.txt`.
@@ -49,10 +50,12 @@ API key **tidak pernah disimpan di source code atau GitHub**. Pada Windows, key 
 
 ## Catatan kemampuan
 
-- Circular Spectrum sekarang tersedia mulai v1.2.0. Renderer polar tetap dibatasi secara internal untuk mencegah biaya `atan2/hypot` tumbuh mengikuti resolusi 4K.
+- `SongInstance.visual_asset_id` tetap menjadi sumber data canonical; v1.3.0 tidak menaikkan schema project dari versi 2.
+- Visual Lagu memakai compiler final/Preview Akurat yang sama. Foto dapat slow zoom/pan, sedangkan video dapat loop atau freeze frame.
+- Transisi visual saat ini: cut, fade, slide kiri, dan slide kanan. Auto-match Visual Lagu tidak melakukan fuzzy/AI guessing dan membiarkan kasus ambigu untuk dipilih manual.
 - Stress 3 jam di CI menguji model, resolver, render plan/graph, dan keamanan command-line; CI tidak melakukan full encode video selama 3 jam.
 - Detail kemampuan artifact portable tersedia di `CAPABILITIES.json`.
-- Release notes v1.2.0 tersedia di `docs/RELEASE_NOTES_v1.2.0.md`.
+- Release notes v1.3.0 tersedia di `docs/RELEASE_NOTES_v1.3.0.md`.
 
 ## Lisensi
 
