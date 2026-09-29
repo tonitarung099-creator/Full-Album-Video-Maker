@@ -72,9 +72,11 @@ def test_release_workflow_is_gated_versioned_checksummed_and_immutable():
     assert 'Set-Content -Path "SHA256SUMS.txt" -Encoding ascii' in workflow
     assert "SHA256SUMS.txt tidak cocok" in workflow
 
-    asset_api = f"https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/assets/{FFMPEG_ASSET_ID}"
-    assert asset_api in workflow
-    assert asset_api in local_build
+    asset_api_base = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/assets/"
+    assert asset_api_base in workflow
+    assert asset_api_base in local_build
+    assert f'ffmpegAssetId = "{FFMPEG_ASSET_ID}"' in workflow
+    assert f'FfmpegAssetId = "{FFMPEG_ASSET_ID}"' in local_build
     assert FFMPEG_SHA256 in workflow
     assert FFMPEG_SHA256 in local_build
     assert "/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip" not in workflow
