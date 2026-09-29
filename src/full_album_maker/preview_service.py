@@ -6,7 +6,7 @@ import tempfile
 from .editor_models import ProjectDocument
 from .paths import ffmpeg_path, temp_dir
 from .render_service_v2 import FFmpegProcessRunner, RenderErrorV2
-from .s11_render_graph import S11FFmpegCompiler
+from .v13_render_graph import V13FFmpegCompiler
 
 
 class AccuratePreviewService:
@@ -20,7 +20,7 @@ class AccuratePreviewService:
         target = Path(destination)
         target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="fam_preview_", dir=temp_dir()) as folder:
-            compiled = S11FFmpegCompiler(self.ffmpeg).compile_frame(
+            compiled = V13FFmpegCompiler(self.ffmpeg).compile_frame(
                 document.clone(),
                 time_tick,
                 target,
