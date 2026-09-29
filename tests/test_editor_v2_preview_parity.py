@@ -41,6 +41,18 @@ def _doc():
     return doc, text
 
 
+def _mouse_press(pos: QPointF) -> QMouseEvent:
+    return QMouseEvent(
+        QMouseEvent.Type.MouseButtonPress,
+        pos,
+        pos,
+        pos,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+
 def test_text_preview_drag_commits_position_without_rotation_or_resize():
     app = _app()
     doc, text = _doc()
@@ -57,24 +69,12 @@ def test_text_preview_drag_commits_position_without_rotation_or_resize():
 
     # Clicking the rotation handle on a text layer must not start an unsupported
     # rotation gesture. Move inside the rect remains supported.
-    event = QMouseEvent(
-        QMouseEvent.Type.MouseButtonPress,
-        rotation_handle,
-        Qt.MouseButton.LeftButton,
-        Qt.MouseButton.LeftButton,
-        Qt.KeyboardModifier.NoModifier,
-    )
+    event = _mouse_press(rotation_handle)
     canvas.mousePressEvent(event)
     assert canvas._gesture is None
 
     inside = rect.center()
-    event = QMouseEvent(
-        QMouseEvent.Type.MouseButtonPress,
-        inside,
-        Qt.MouseButton.LeftButton,
-        Qt.MouseButton.LeftButton,
-        Qt.KeyboardModifier.NoModifier,
-    )
+    event = _mouse_press(inside)
     canvas.mousePressEvent(event)
     assert canvas._gesture is not None
     assert canvas._gesture.mode == "move"
