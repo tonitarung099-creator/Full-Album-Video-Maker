@@ -2,7 +2,7 @@
 
 Aplikasi Windows portable untuk membuat video **full album YouTube** dari banyak file audio dan elemen visual, dengan editor timeline, template, spectrum, render FFmpeg, serta Agen AI Gemini opsional.
 
-> Status: **Stable v1.3.0 candidate** setelah milestone S01–S12, Release Candidate Audit, Cover Manager, Circular Spectrum, dan penambahan Visual Lagu per-song. Build Windows portable tetap wajib melewati regression suite, real FFmpeg render, dan smoke ZIP hasil ekstrak tanpa Python/FFmpeg global atau API key sebelum release dipublikasikan.
+> Status: **Stable v1.4.0 candidate**. Fitur manual v1.1–v1.3 (Cover Manager, Circular Spectrum, Free Timeline, dan Visual Lagu) sekarang juga tersedia melalui intent Gemini yang tetap divalidasi engine lokal. Build Windows portable tetap wajib melewati regression suite, real FFmpeg render, dan smoke ZIP hasil ekstrak tanpa Python/FFmpeg global atau API key sebelum release dipublikasikan.
 
 ## Fitur utama
 
@@ -17,19 +17,20 @@ Aplikasi Windows portable untuk membuat video **full album YouTube** dari banyak
 - Overlay procedural seperti bokeh, glow, light leak, grain, VHS noise, vignette, dan particles.
 - Render H.264/H.265 melalui FFmpeg serta YouTube chapters, tracklist, dan timeline sidecar.
 - Custom template portabel untuk layout/effect yang tidak bergantung pada asset project eksternal.
-- Gemini Agent untuk memahami perintah bahasa manusia pada operasi editor yang sudah didukung; edit tetap divalidasi dan dieksekusi engine lokal.
+- **Gemini AI parity v1.4**: bahasa manusia dapat mengatur Cover, Visual Lagu, Circular Spectrum, serta Free Timeline/crossfade. Gemini hanya menerjemahkan intent; stable ID, ambiguity, revision, validasi, Undo, dan render tetap dikerjakan lokal.
+- Context AI tidak mengirim locator/path media atau API key; media hanya diekspos sebagai ID stabil + nama file aman.
 - Pool hingga 100 API key Gemini dengan failover/cooldown; penggunaan AI tetap opsional.
 - Tetap dapat dipakai manual dan merender tanpa AI/internet.
 - Distribusi utama: **ZIP portable multi-file**, tanpa installer dan tanpa hak admin.
 
 ## Portable Windows
 
-Paket stabil v1.3.0 bernama `Full-Album-Maker-v1.3.0-Windows-Portable.zip` dan berisi EXE onedir, runtime/DLL PySide6, FFmpeg + ffprobe, fallback Noto Sans, assets, notices, `CAPABILITIES.json`, folder `data`, `temp`, dan `output`.
+Paket v1.4.0 bernama `Full-Album-Maker-v1.4.0-Windows-Portable.zip` dan berisi EXE onedir, runtime/DLL PySide6, FFmpeg + ffprobe, fallback Noto Sans, assets, notices, `CAPABILITIES.json`, folder `data`, `temp`, dan `output`.
 
 Setiap GitHub Release juga menyertakan `SHA256SUMS.txt`. Di PowerShell Windows, checksum ZIP dapat diverifikasi dengan:
 
 ```powershell
-Get-FileHash .\Full-Album-Maker-v1.3.0-Windows-Portable.zip -Algorithm SHA256
+Get-FileHash .\Full-Album-Maker-v1.4.0-Windows-Portable.zip -Algorithm SHA256
 ```
 
 Nilai SHA-256 harus sama dengan nilai untuk nama ZIP tersebut di `SHA256SUMS.txt`.
@@ -44,18 +45,22 @@ Script ini memakai dependency build terkunci, memverifikasi SHA-256 FFmpeg, menj
 
 Pada push `main`, workflow Windows hanya mempublikasikan GitHub Release untuk versi aplikasi setelah regression, real FFmpeg, PyInstaller, ZIP, checksum, dan isolated portable smoke selesai sukses.
 
-## Keamanan API key
+## Keamanan API key dan AI
 
 API key **tidak pernah disimpan di source code atau GitHub**. Pada Windows, key disimpan lokal menggunakan Windows DPAPI. Render manual tidak membutuhkan Gemini/API key.
 
+Gemini tidak menerima path media mentah. Untuk assignment Cover/Visual Lagu, context hanya memuat `asset_id`, tipe media, dan nama file aman. Query nama fallback memakai exact-normalized match lokal; kasus ambigu dihentikan dan meminta pilihan eksplisit.
+
 ## Catatan kemampuan
 
-- `SongInstance.visual_asset_id` tetap menjadi sumber data canonical; v1.3.0 tidak menaikkan schema project dari versi 2.
+- Schema project tetap versi 2; v1.4.0 tidak menambah migrasi format project.
+- Gemini v1.4 dapat memasang/menghapus cover atau visual per lagu, auto-match lokal, mengatur style Visual Lagu, menambah/mengubah Circular Spectrum, dan mengatur mode/timing Free Timeline.
+- Satu respons AI tetap disimulasikan pada clone lalu di-commit sebagai satu transaksi Undo; stale revision/ID tidak dikenal/ambiguity tetap menghasilkan 0 mutasi.
 - Visual Lagu memakai compiler final/Preview Akurat yang sama. Foto dapat slow zoom/pan, sedangkan video dapat loop atau freeze frame.
-- Transisi visual saat ini: cut, fade, slide kiri, dan slide kanan. Auto-match Visual Lagu tidak melakukan fuzzy/AI guessing dan membiarkan kasus ambigu untuk dipilih manual.
+- Transisi visual: cut, fade, slide kiri, dan slide kanan.
 - Stress 3 jam di CI menguji model, resolver, render plan/graph, dan keamanan command-line; CI tidak melakukan full encode video selama 3 jam.
 - Detail kemampuan artifact portable tersedia di `CAPABILITIES.json`.
-- Release notes v1.3.0 tersedia di `docs/RELEASE_NOTES_v1.3.0.md`.
+- Release notes v1.4.0 tersedia di `docs/RELEASE_NOTES_v1.4.0.md`.
 
 ## Lisensi
 
