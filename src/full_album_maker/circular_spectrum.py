@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 
 MIN_INTERNAL_SIDE = 64
@@ -42,6 +43,17 @@ def circular_geometry(width: int, height: int, inner_ratio: float) -> CircularSp
     )
 
 
+def _color_factors(color: str) -> tuple[float, float, float]:
+    value = str(color or "").strip().lower()
+    if value.startswith("0x"):
+        value = value[2:]
+    elif value.startswith("#"):
+        value = value[1:]
+    if not re.fullmatch(r"[0-9a-f]{6}", value):
+        raise ValueError("Warna Circular Spectrum harus #RRGGBB/0xRRGGBB.")
+    return tuple(int(value[index : index + 2], 16) / 255.0 for index in (0, 2, 4))
+
+
 def circular_spectrum_filter(
     *,
     width: int,
@@ -58,9 +70,11 @@ def circular_spectrum_filter(
     the requested transform box. This keeps a true circle even when the user
     gives the layer a rectangular box.
 
-    Alpha is derived from the sampled RGB frequency energy instead of inheriting
-    the upstream frame alpha. This makes transparency deterministic across the
-    FFmpeg builds used by Preview Akurat and the Windows portable release.
+    The frequency image is intentionally converted to grayscale before polar
+    sampling. FFmpeg's luma sampler is stable across the pinned Windows build and
+    avoids RGB-plane sampling differences. After remapping, black is keyed to
+    transparency and the white energy map is recolored to the user's spectrum
+    color with colorchannelmixer.
     """
 
     geometry = circular_geometry(width, height, inner_ratio)
@@ -69,6 +83,7 @@ def circular_spectrum_filter(
     band = OUTER_RADIUS_RATIO - inner
     if band <= 0:
         raise ValueError("Radius Circular Spectrum menghasilkan ketebalan nol.")
+    red, green, blue = _color_factors(color)
 
     radius = "hypot(X-W/2,Y-H/2)"
     angle_x = (
@@ -79,23 +94,19 @@ def circular_spectrum_filter(
         + radius
         + f"-min(W,H)*{inner:.6f})/(min(W,H)*{band:.6f})*(H-1),0,H-1)"
     )
-    sample_r = f"r({angle_x},{source_y})"
-    sample_g = f"g({angle_x},{source_y})"
-    sample_b = f"b({angle_x},{source_y})"
-    sampled_energy = f"max({sample_r},max({sample_g},{sample_b}))"
-    alpha = (
+    radial_luma = (
         f"if(between({radius},min(W,H)*{inner:.6f},"
-        f"min(W,H)*{OUTER_RADIUS_RATIO:.6f}),{sampled_energy},0)"
+        f"min(W,H)*{OUTER_RADIUS_RATIO:.6f}),"
+        f"lum({angle_x},{source_y}),0)"
     )
 
     return (
         f"showfreqs=s={side}x{side}:mode=bar:"
-        f"fscale={frequency_scale}:ascale={amplitude_scale}:colors={color},"
-        "format=rgba,"
-        f"geq=r='{sample_r}':"
-        f"g='{sample_g}':"
-        f"b='{sample_b}':"
-        f"a='{alpha}':interpolation=bilinear,"
+        f"fscale={frequency_scale}:ascale={amplitude_scale}:colors=white,"
+        "format=gray,"
+        f"geq=lum='{radial_luma}':interpolation=bilinear,"
+        "format=rgba,colorkey=0x000000:0.02:0.0,"
+        f"colorchannelmixer=rr={red:.6f}:gg={green:.6f}:bb={blue:.6f},"
         f"scale={geometry.target_width}:{geometry.target_height}:"
         "force_original_aspect_ratio=decrease,"
         f"pad={geometry.target_width}:{geometry.target_height}:"
