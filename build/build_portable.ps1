@@ -19,17 +19,25 @@ $ReleaseZipName = "Full-Album-Maker-v$Version-Windows-Portable.zip"
 
 # Keep the local release path aligned with CI. A developer running this script
 # should get the same dependency family, FFmpeg digest, font fallback, capability
-# report, and extracted-ZIP smoke contract as the GitHub Actions artifact.
+# report, checksum, and extracted-ZIP smoke contract as the GitHub Actions artifact.
 python -m pip install pip==26.2.1
 Assert-NativeSuccess "Pin pip"
 python -m pip install -r build/requirements-windows.lock
 Assert-NativeSuccess "Install dependency Python terkunci"
 
-$FfmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip"
-$FfmpegSha256 = "b745ed683204c8e154d627bf75f2e530b7b2eec51d14fabdc8771912423ba67e"
+# BtbN release 398275969 / asset 595476894, observed 2026-09-29.
+# Pin by release-asset API ID, not the mutable /download/latest/ alias.
+$FfmpegAssetId = "595476894"
+$FfmpegUrl = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/assets/$FfmpegAssetId"
+$FfmpegSha256 = "e6db684f1527f4c2280b017c7af19ebd359424eee8b35974bc35b4d7ee110989"
+$FfmpegHeaders = @{
+    Accept = "application/octet-stream"
+    "User-Agent" = "Full-Album-Maker-Build"
+    "X-GitHub-Api-Version" = "2022-11-28"
+}
 if (Test-Path ffmpeg.zip) { Remove-Item ffmpeg.zip -Force }
 if (Test-Path ffmpeg_unpack) { Remove-Item ffmpeg_unpack -Recurse -Force }
-Invoke-WebRequest -Uri $FfmpegUrl -OutFile ffmpeg.zip
+Invoke-WebRequest -Uri $FfmpegUrl -Headers $FfmpegHeaders -OutFile ffmpeg.zip
 $ActualFfmpegSha = (Get-FileHash ffmpeg.zip -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($ActualFfmpegSha -ne $FfmpegSha256) {
     throw "Digest FFmpeg berubah. Expected $FfmpegSha256, got $ActualFfmpegSha. Update pin secara eksplisit."
@@ -101,6 +109,14 @@ if (Test-Path $Zip) { Remove-Item $Zip -Force }
 Compress-Archive -Path "$App" -DestinationPath $Zip
 if (-not (Test-Path $Zip)) { throw "Portable ZIP tidak berhasil dibuat." }
 
+$ZipSha256 = (Get-FileHash $Zip -Algorithm SHA256).Hash.ToLowerInvariant()
+$ChecksumFile = "$Root\SHA256SUMS.txt"
+"$ZipSha256  $ReleaseZipName" | Set-Content -Path $ChecksumFile -Encoding ascii
+$RecordedChecksum = (Get-Content $ChecksumFile -Raw).Trim()
+if ($RecordedChecksum -ne "$ZipSha256  $ReleaseZipName") {
+    throw "SHA256SUMS.txt tidak cocok dengan ZIP portable yang baru dibuat."
+}
+
 $SmokeRoot = Join-Path $Root "portable smoke – O'Brien"
 if (Test-Path $SmokeRoot) { Remove-Item $SmokeRoot -Recurse -Force }
 Expand-Archive $Zip -DestinationPath $SmokeRoot
@@ -153,5 +169,6 @@ if ($Smoke.gui_title -notlike "*v$Version*") {
 
 Write-Host "Full Album Maker v$Version"
 Write-Host "Portable ZIP siap di: $Zip"
-Write-Host "SHA-256: $((Get-FileHash $Zip -Algorithm SHA256).Hash.ToLowerInvariant())"
+Write-Host "SHA256SUMS siap di: $ChecksumFile"
+Write-Host "SHA-256: $ZipSha256"
 Write-Host "Smoke portable: OK ($($Smoke.output_duration_seconds)s; $($Smoke.output_bytes) bytes; $($Smoke.output_streams -join ', '))"

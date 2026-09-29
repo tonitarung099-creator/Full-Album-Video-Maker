@@ -70,7 +70,9 @@ def test_local_portable_build_keeps_s12_release_contract():
     required_fragments = (
         "pip==26.2.1",
         "build/requirements-windows.lock",
-        "b745ed683204c8e154d627bf75f2e530b7b2eec51d14fabdc8771912423ba67e",
+        'FfmpegAssetId = "595476894"',
+        "e6db684f1527f4c2280b017c7af19ebd359424eee8b35974bc35b4d7ee110989",
+        "api.github.com/repos/BtbN/FFmpeg-Builds/releases/assets/",
         "23e54b51ddffbc7713c583748e3bd86f62b1fa4a",
         "NotoSans.ttf",
         "write_release_capabilities.py",
@@ -80,9 +82,11 @@ def test_local_portable_build_keeps_s12_release_contract():
         "Get-Command python",
         "Get-Command ffmpeg",
         "output_streams",
+        "SHA256SUMS.txt",
     )
     for fragment in required_fragments:
         assert fragment in script
 
+    assert "/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip" not in script
     assert "pip install --upgrade pip" not in script
     assert "pip install -r requirements-dev.txt" not in script

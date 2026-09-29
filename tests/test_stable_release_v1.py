@@ -11,11 +11,13 @@ from full_album_maker.project_dirty import _update_window_title
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FFMPEG_ASSET_ID = "595476894"
+FFMPEG_SHA256 = "e6db684f1527f4c2280b017c7af19ebd359424eee8b35974bc35b4d7ee110989"
 
 
 def test_stable_version_is_consistent_across_package_metadata():
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert __version__ == "1.0.0"
+    assert __version__ == "1.0.1"
     assert pyproject["project"]["version"] == __version__
     assert (ROOT / f"docs/RELEASE_NOTES_v{__version__}.md").exists()
 
@@ -35,7 +37,7 @@ def test_window_title_exposes_stable_version():
     assert window.title == f"Full Album Maker v{__version__}"
 
 
-def test_capability_report_records_release_identity(tmp_path: Path):
+def test_capability_report_records_release_identity_and_immutable_ffmpeg_pin(tmp_path: Path):
     subprocess.run(
         [
             sys.executable,
@@ -49,9 +51,13 @@ def test_capability_report_records_release_identity(tmp_path: Path):
     payload = json.loads((tmp_path / "CAPABILITIES.json").read_text(encoding="utf-8"))
     assert payload["app_version"] == __version__
     assert payload["release_tag"] == f"v{__version__}"
+    ffmpeg = payload["bundled"]["ffmpeg"]
+    assert str(ffmpeg["asset_id"]) == FFMPEG_ASSET_ID
+    assert ffmpeg["sha256"] == FFMPEG_SHA256
+    assert ffmpeg["download_strategy"] == "github_release_asset_api_id"
 
 
-def test_release_workflow_is_gated_and_versioned():
+def test_release_workflow_is_gated_versioned_checksummed_and_immutable():
     workflow = (ROOT / ".github" / "workflows" / "build-windows-portable.yml").read_text(
         encoding="utf-8"
     )
@@ -60,9 +66,23 @@ def test_release_workflow_is_gated_and_versioned():
     assert "contents: write" in workflow
     assert "Full-Album-Maker-v$version-Windows-Portable.zip" in workflow
     assert "github.event_name == 'push' && github.ref == 'refs/heads/main'" in workflow
-    assert "gh release create $tag $env:RELEASE_ZIP" in workflow
+    assert "gh release create $tag $env:RELEASE_ZIP SHA256SUMS.txt" in workflow
     assert "docs/RELEASE_NOTES_$tag.md" in workflow
     assert "gui_title -notlike \"*v$env:APP_VERSION*\"" in workflow
+    assert 'Set-Content -Path "SHA256SUMS.txt" -Encoding ascii' in workflow
+    assert "SHA256SUMS.txt tidak cocok" in workflow
+
+    asset_api_base = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/assets/"
+    assert asset_api_base in workflow
+    assert asset_api_base in local_build
+    assert f'ffmpegAssetId = "{FFMPEG_ASSET_ID}"' in workflow
+    assert f'FfmpegAssetId = "{FFMPEG_ASSET_ID}"' in local_build
+    assert FFMPEG_SHA256 in workflow
+    assert FFMPEG_SHA256 in local_build
+    assert "/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip" not in workflow
+    assert "/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip" not in local_build
 
     assert "Full-Album-Maker-v$Version-Windows-Portable.zip" in local_build
     assert "gui_title -notlike \"*v$Version*\"" in local_build
+    assert '$ChecksumFile = "$Root\\SHA256SUMS.txt"' in local_build
+    assert "SHA256SUMS.txt tidak cocok" in local_build
