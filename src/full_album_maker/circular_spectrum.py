@@ -57,6 +57,10 @@ def circular_spectrum_filter(
     The resulting square is then scaled with aspect preservation and padded into
     the requested transform box. This keeps a true circle even when the user
     gives the layer a rectangular box.
+
+    Alpha is derived from the sampled RGB frequency energy instead of inheriting
+    the upstream frame alpha. This makes transparency deterministic across the
+    FFmpeg builds used by Preview Akurat and the Windows portable release.
     """
 
     geometry = circular_geometry(width, height, inner_ratio)
@@ -75,19 +79,22 @@ def circular_spectrum_filter(
         + radius
         + f"-min(W,H)*{inner:.6f})/(min(W,H)*{band:.6f})*(H-1),0,H-1)"
     )
-    sampled_alpha = f"alpha({angle_x},{source_y})"
+    sample_r = f"r({angle_x},{source_y})"
+    sample_g = f"g({angle_x},{source_y})"
+    sample_b = f"b({angle_x},{source_y})"
+    sampled_energy = f"max({sample_r},max({sample_g},{sample_b}))"
     alpha = (
         f"if(between({radius},min(W,H)*{inner:.6f},"
-        f"min(W,H)*{OUTER_RADIUS_RATIO:.6f}),{sampled_alpha},0)"
+        f"min(W,H)*{OUTER_RADIUS_RATIO:.6f}),{sampled_energy},0)"
     )
 
     return (
         f"showfreqs=s={side}x{side}:mode=bar:"
         f"fscale={frequency_scale}:ascale={amplitude_scale}:colors={color},"
-        "format=rgba,colorkey=0x000000:0.08:0.0,"
-        f"geq=r='r({angle_x},{source_y})':"
-        f"g='g({angle_x},{source_y})':"
-        f"b='b({angle_x},{source_y})':"
+        "format=rgba,"
+        f"geq=r='{sample_r}':"
+        f"g='{sample_g}':"
+        f"b='{sample_b}':"
         f"a='{alpha}':interpolation=bilinear,"
         f"scale={geometry.target_width}:{geometry.target_height}:"
         "force_original_aspect_ratio=decrease,"
