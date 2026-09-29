@@ -111,12 +111,14 @@ class PropertyInspector(QWidget):
         for label, value in (("Linear", "linear"), ("Sqrt", "sqrt"), ("Cbrt", "cbrt"), ("Log", "log")):
             self.amplitude_scale.addItem(label, value)
         self.spectrum_mirror = QCheckBox("Aktif")
+        self.spectrum_inner_ratio = self._spin(0.15, 0.85, 0.01, 2)
         self.form.addRow("Preset Spectrum", self.spectrum_preset)
         self.form.addRow("Style Spectrum", self.spectrum_style)
         self.form.addRow("Sensitivity", self.spectrum_gain)
         self.form.addRow("Skala Frekuensi", self.frequency_scale)
         self.form.addRow("Skala Amplitudo", self.amplitude_scale)
         self.form.addRow("Mirror", self.spectrum_mirror)
+        self.form.addRow("Radius Dalam", self.spectrum_inner_ratio)
         self._spectrum_controls = (
             self.spectrum_preset,
             self.spectrum_style,
@@ -124,6 +126,7 @@ class PropertyInspector(QWidget):
             self.frequency_scale,
             self.amplitude_scale,
             self.spectrum_mirror,
+            self.spectrum_inner_ratio,
         )
 
         self.cover_fit = QComboBox()
@@ -197,6 +200,7 @@ class PropertyInspector(QWidget):
         self.frequency_scale.activated.connect(lambda: self._emit_property("frequency_scale", self.frequency_scale.currentData()))
         self.amplitude_scale.activated.connect(lambda: self._emit_property("amplitude_scale", self.amplitude_scale.currentData()))
         self.spectrum_mirror.toggled.connect(lambda value: self._emit_property("mirror", bool(value)))
+        self.spectrum_inner_ratio.editingFinished.connect(lambda: self._emit_property("inner_ratio", self.spectrum_inner_ratio.value()))
         self.cover_fit.activated.connect(lambda: self._emit_property("fit", self.cover_fit.currentData()))
         self.vinyl_spin.editingFinished.connect(lambda: self._emit_property("spin_seconds", self.vinyl_spin.value()))
         self.vinyl_center_ratio.editingFinished.connect(lambda: self._emit_property("center_ratio", self.vinyl_center_ratio.value()))
@@ -344,10 +348,12 @@ class PropertyInspector(QWidget):
                 self._set_combo(self.frequency_scale, str(layer.properties.get("frequency_scale", "log")))
                 self._set_combo(self.amplitude_scale, str(layer.properties.get("amplitude_scale", "sqrt")))
                 self.spectrum_mirror.setChecked(bool(layer.properties.get("mirror", False)))
+                self.spectrum_inner_ratio.setValue(float(layer.properties.get("inner_ratio", 0.58)))
                 style = str(layer.properties.get("style", "bars"))
                 capability = SPECTRUM_CAPABILITIES.get(style)
                 self._set_field_visible(self.frequency_scale, bool(capability and capability.supports_frequency_scale))
                 self._set_field_visible(self.amplitude_scale, bool(capability and capability.supports_amplitude_scale))
+                self._set_field_visible(self.spectrum_inner_ratio, bool(capability and capability.supports_inner_ratio))
 
             if is_cover:
                 self._set_combo(self.cover_fit, str(layer.properties.get("fit", "fill")))
